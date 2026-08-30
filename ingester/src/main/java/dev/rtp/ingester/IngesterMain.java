@@ -33,6 +33,9 @@ public final class IngesterMain {
     private static final long BACKOFF_START_MS = 1_000L;
     private static final long BACKOFF_MAX_MS = 30_000L;
 
+    /** poll 을 짧게 끊어 기다린다. PING 주기와 유휴 판정을 놓치지 않기 위한 것. */
+    private static final long POLL_SLICE_MS = 1_000L;
+
     public static void main(String[] args) throws Exception {
         Config cfg = Config.fromEnv();
         new IngesterMain(cfg).run();
@@ -116,12 +119,20 @@ public final class IngesterMain {
             long nextPingAt = System.currentTimeMillis() + cfg.pingIntervalMs();
 
             while (!stop.get() && !stream.closed()) {
-                if (System.currentTimeMillis() >= nextPingAt) {
+                long now = System.currentTimeMillis();
+
+                if (now >= nextPingAt) {
                     stream.ping();
-                    nextPingAt = System.currentTimeMillis() + cfg.pingIntervalMs();
+                    nextPingAt = now + cfg.pingIntervalMs();
+                }
+                // 유휴 판정은 수신 시각으로 직접 한다. poll 을 길게 블로킹하면
+                // 그 사이 PING 주기를 놓쳐 한산한 구간에서 재연결만 반복하게 된다.
+                if (now - stream.lastRecvAtMs() > cfg.recvTimeoutMs()) {
+                    stream.markIdleTimeout();
+                    break;
                 }
 
-                JsonNode frame = stream.poll();
+                JsonNode frame = stream.poll(POLL_SLICE_MS);
                 if (frame == null) {
                     if (stream.closed()) {
                         break;

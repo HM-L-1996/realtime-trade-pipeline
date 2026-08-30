@@ -45,6 +45,7 @@ public final class TossTradeStream implements AutoCloseable {
     private final AtomicReference<String> closeReason = new AtomicReference<>();
     private final StringBuilder partial = new StringBuilder();
 
+    private volatile long lastRecvAtMs = System.currentTimeMillis();
     private WebSocket ws;
 
     public TossTradeStream(Config cfg) {
@@ -80,22 +81,35 @@ public final class TossTradeStream implements AutoCloseable {
     }
 
     /**
-     * 다음 프레임을 기다린다.
+     * 다음 프레임을 최대 {@code waitMs} 만큼 기다린다.
      *
-     * @return 프레임. 연결이 끊겼거나 수신 타임아웃이면 null.
+     * <p>대기 시간을 호출자가 정하는 이유가 있다. 수신 타임아웃(90초)만큼 블로킹하면
+     * 그 사이에 PING 주기(60초)가 지나가 버려, <b>한산한 구간에서 PING 을 한 번도
+     * 못 보내고 재연결만 반복</b>하게 된다. 실제 서버에 붙여보고 발견한 버그다.
+     * 호출자가 짧게 끊어 기다리면서 PING 과 유휴 판정을 스스로 관리한다.
+     *
+     * @return 프레임. 대기 시간 안에 아무것도 안 왔거나 파싱할 수 없으면 null.
      */
-    public JsonNode poll() throws InterruptedException {
-        String raw = inbox.poll(cfg.recvTimeoutMs(), TimeUnit.MILLISECONDS);
-        if (raw == null) {
-            // 서버는 180초 무활동에 끊는다. 그때까지 기다리면 유실 구간이 길어지므로
-            // 우리가 먼저 끊고 재연결한다.
-            closeReason.compareAndSet(null, "recv-timeout");
+    public JsonNode poll(long waitMs) throws InterruptedException {
+        String raw = inbox.poll(waitMs, TimeUnit.MILLISECONDS);
+        if (raw == null || SENTINEL.equals(raw)) {
             return null;
         }
-        if (SENTINEL.equals(raw)) {
-            return null;
-        }
+        lastRecvAtMs = System.currentTimeMillis();
         return TradeFrameParser.parseFrame(raw).orElse(null);
+    }
+
+    /** 마지막으로 무언가 받은 시각. 유휴 판정의 기준이다. */
+    public long lastRecvAtMs() {
+        return lastRecvAtMs;
+    }
+
+    /**
+     * 서버는 180초 무활동에 끊는다. 그때까지 기다리면 유실 구간이 길어지므로
+     * 우리가 먼저 끊고 재연결한다.
+     */
+    public void markIdleTimeout() {
+        closeReason.compareAndSet(null, "recv-timeout");
     }
 
     public void ping() {

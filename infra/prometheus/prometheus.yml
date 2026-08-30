@@ -19,3 +19,8 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ['localhost:9090']
+
+  # 수집기. 소스 유실률과 내 파이프라인 버그를 구분하는 지표가 여기서 나온다.
+  - job_name: ingester
+    static_configs:
+      - targets: ['ingester:9200']

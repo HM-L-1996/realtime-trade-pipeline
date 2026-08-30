@@ -103,6 +103,34 @@ services:
         taskmanager.numberOfTaskSlots: 3
         state.backend.type: rocksdb
         state.backend.incremental: true
+  # 수집기. 자격 증명은 저장소 루트 .env 에서 온다 (커밋되지 않는다).
+  # 실행: docker compose -f infra/docker-compose.yml --profile live up -d ingester
+  #
+  # 기본 프로필에서 제외한 이유: 국내장은 평일 09:00-15:30 만 열린다.
+  # 장외에 띄워두면 체결 없이 재연결만 반복하며 로그를 더럽힌다.
+  # 장외 검증은 SyntheticMain 을 쓴다.
+  ingester:
+    profiles: ["live"]
+    build:
+      context: ..
+      dockerfile: ingester/Dockerfile
+    image: rtp-ingester:0.1.0
+    container_name: rtp-ingester
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      KAFKA_TRADES_TOPIC: trades.raw
+      SYMBOLS: "005930,000660"
+      METRICS_PORT: "9200"
+    ports:
+      - "9200:9200"     # Prometheus 스크레이프 대상
+    restart: unless-stopped
+
+
     volumes:
       - ./flink/checkpoints:/flink/checkpoints
       - ./flink/savepoints:/flink/savepoints
