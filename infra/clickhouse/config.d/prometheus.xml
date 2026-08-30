@@ -1,0 +1,16 @@
+<clickhouse>
+    <!--
+      ClickHouse 는 Prometheus 엔드포인트를 내장하고 있어 exporter 가 필요 없다.
+      보려는 것: 머지 지연, 파트 수, 삽입 실패, 쿼리 지연.
+      특히 파트 수가 치솟으면 "too many parts" 로 적재가 막히는데,
+      배치 크기를 잘못 잡으면 바로 만나게 되는 상황이다.
+    -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors>true</errors>
+    </prometheus>
+</clickhouse>

@@ -24,6 +24,19 @@ services:
       - --storage.tsdb.retention.time=15d
       - --web.enable-lifecycle
 
+  # Kafka 는 Prometheus 를 네이티브로 지원하지 않는다.
+  # kafka-exporter 는 특히 **컨슈머 그룹 lag** 을 내주는데,
+  # "처리량이 유입을 못 따라갈 때 백프레셔가 어디서 발생하는가" 실험의 핵심 지표다.
+  # (브로커 JVM 내부 지표까지 보려면 JMX exporter 를 따로 붙여야 한다.)
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.8.0
+    container_name: rtp-kafka-exporter
+    command:
+      - --kafka.server=kafka:19092
+      - --web.listen-address=:9308
+    ports:
+      - "9308:9308"
+
   grafana:
     image: grafana/grafana:11.4.0
     container_name: rtp-grafana

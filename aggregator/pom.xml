@@ -41,10 +41,19 @@
       <artifactId>flink-connector-kafka</artifactId>
       <version>${flink.kafka.connector.version}</version>
     </dependency>
+    <!-- 로깅 구현체는 Flink 클러스터가 갖고 있다. jar 에 넣으면 충돌한다. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>
+    <!-- ClickHouse 적재는 JDBC 드라이버 없이 HTTP 인터페이스를 직접 쓴다.
+         clickhouse-jdbc 를 fat jar 에 넣으면 셰이딩 충돌이 잦고,
+         여기서는 배치·플러시·재시도가 명시적으로 보이는 편이 낫다. -->
 
     <dependency>
       <groupId>org.apache.flink</groupId>

@@ -24,3 +24,14 @@ scrape_configs:
   - job_name: ingester
     static_configs:
       - targets: ['ingester:9200']
+
+  # Kafka. 컨슈머 lag 이 여기서 나온다 - Flink 가 유입을 따라가는지 판단하는 기준.
+  - job_name: kafka
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+
+  # ClickHouse 내장 엔드포인트. 파트 수·머지 지연·삽입 실패를 본다.
+  # 파트 수가 치솟으면 "too many parts" 로 적재가 막힌다.
+  - job_name: clickhouse
+    static_configs:
+      - targets: ['clickhouse:9363']
