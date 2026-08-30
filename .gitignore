@@ -15,3 +15,4 @@ infra/flink/savepoints/*
 
 # 개인 조사 메모 — public 저장소에 올리지 않는다
 docs/toss-api-analysis.md
+docs/working-notes.md
