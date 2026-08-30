@@ -36,4 +36,4 @@ docker compose -f infra/docker-compose.yml up -d
 
 ## 스택
 
-Kafka · Apache Flink · ClickHouse · Docker Compose
+Kafka · Apache Flink (Kubernetes Operator) · ClickHouse · Kubernetes
