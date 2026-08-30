@@ -12,11 +12,15 @@ CREATE TABLE IF NOT EXISTS rtp.candles_1m
 (
     symbol        LowCardinality(String),
     window_start  DateTime64(3, 'UTC'),
-    open          Float64,
-    high          Float64,
-    low           Float64,
-    close         Float64,
-    volume        Float64,
+    -- Float64 를 쓰면 안 된다. 수집기가 가격을 문자열로 보존하고 집계도 정수 스케일로
+    -- 하는데, 저장 시점에 float 로 바꾸면 그 노력이 전부 무효가 된다.
+    -- 공식 캔들과 0.01 차이가 났을 때 내 집계 문제인지 부동소수 문제인지
+    -- 구분할 수 없게 되는 것이 핵심 문제다. trades_raw 와 스케일을 맞춘다.
+    open          Decimal64(4),
+    high          Decimal64(4),
+    low           Decimal64(4),
+    close         Decimal64(4),
+    volume        Decimal64(8),
     trade_count   UInt64,
     -- 관측용 메타: 같은 윈도가 몇 번, 언제 쓰였는지 추적한다
     ingested_at   DateTime64(3, 'UTC') DEFAULT now64(3),
@@ -31,11 +35,13 @@ CREATE TABLE IF NOT EXISTS rtp.candles_1m_official
 (
     symbol        LowCardinality(String),
     window_start  DateTime64(3, 'UTC'),
-    open          Float64,
-    high          Float64,
-    low           Float64,
-    close         Float64,
-    volume        Float64,
+    -- 정답지에 부동소수 오차를 섞을 수 없다. 내 캔들과 같은 스케일이어야
+    -- 뺄셈 결과가 의미를 가진다.
+    open          Decimal64(4),
+    high          Decimal64(4),
+    low           Decimal64(4),
+    close         Decimal64(4),
+    volume        Decimal64(8),
     fetched_at    DateTime64(3, 'UTC') DEFAULT now64(3)
 )
 ENGINE = ReplacingMergeTree(fetched_at)

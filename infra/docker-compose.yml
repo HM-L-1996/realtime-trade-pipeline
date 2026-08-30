@@ -131,6 +131,38 @@ services:
     restart: unless-stopped
 
 
+  # 공식 캔들 수집기 = 정답지. 이것이 없으면 validation.md 를 쓸 수 없다.
+  # 수집기와 같은 이미지를 쓰고 진입점만 다르다.
+  official-candles:
+    profiles: ["live"]
+    image: rtp-ingester:0.1.0
+    container_name: rtp-official-candles
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: rtp
+      CLICKHOUSE_PASSWORD: rtp
+      SYMBOLS: "005930,000660"
+    entrypoint:
+      - java
+      - -cp
+      - /app/ingester.jar
+      - dev.rtp.ingester.OfficialCandleMain
+      # settle-minutes: 진행 중인 분봉은 부분 집계일 수 있어 건너뛴다.
+      # 그걸 정답지로 저장하면 내 집계가 맞는데도 틀린 것처럼 보인다.
+      - --interval-seconds
+      - "60"
+      - --settle-minutes
+      - "2"
+      - --count
+      - "200"
+    restart: unless-stopped
+
+
     volumes:
       - ./flink/checkpoints:/flink/checkpoints
       - ./flink/savepoints:/flink/savepoints

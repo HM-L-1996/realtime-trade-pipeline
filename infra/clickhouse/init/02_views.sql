@@ -36,7 +36,9 @@ SELECT
     m.trade_count                                  AS my_trade_count,
     m.close - o.close                              AS close_diff,
     m.volume - o.volume                            AS volume_diff,
-    abs(m.volume - o.volume) / nullIf(o.volume, 0) AS volume_rel_err
+    -- 상대오차만 Float 로 낸다. 눈으로 크기를 보기 위한 값이고,
+    -- 판정 근거가 되는 close_diff/volume_diff 는 Decimal 뺄셈이라 정확하다.
+    toFloat64(abs(m.volume - o.volume)) / nullIf(toFloat64(o.volume), 0) AS volume_rel_err
 FROM rtp.candles_1m_official AS o
 LEFT JOIN rtp.candles_1m_dedup AS m
        ON o.symbol = m.symbol AND o.window_start = m.window_start;
