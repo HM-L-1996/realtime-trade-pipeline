@@ -19,11 +19,14 @@ Exchange WebSocket → Kafka → Flink → ClickHouse → 공식 캔들과 대�
 작성자는 데이터 엔지니어 4년차로, 실무에서 **CDC 적재**(Debezium→Kafka→Iceberg)와
 **Airflow on EKS 운영** 경험이 있다. 이 프로젝트는 실무에서 얇았던 영역 —
 **스트림 처리 의미론(이벤트타임 윈도우, 워터마크, exactly-once)과 스트리밍 워크로드의 장애 대응** — 을 채운다.
-따라서 이미 아는 영역(K8s 배포 자체, CI/CD, 적재 파이프라인)에 시간을 쓰지 않는다.
+따라서 이미 아는 영역(K8s 배포 자체, 적재 파이프라인)에 시간을 쓰지 않는다.
+
+예외로 ArgoCD·Superset은 학습 목적으로 포함하되 **순서를 뒤로 둔다**(아래 스택 참고).
+파이프라인 검증이 끝나기 전에 이쪽에 시간을 쓰기 시작하면 원래 목적이 밀린다.
 
 ## 작업 원칙
 
-- **범위를 넓히지 말 것.** 본업 병행이라 벌리면 미완성으로 끝난다. 종목은 소수만, 대시보드 없음
+- **범위를 넓히지 말 것.** 본업 병행이라 벌리면 미완성으로 끝난다. 종목은 소수만
 - **개발 순서: docker-compose로 먼저 동작시킨 뒤 K8s로 옮긴다.** 처음부터 K8s에서 시작하면
   처리 로직 버그와 클러스터 문제가 뒤엉킨다
 - **실험하면 기록한다.** 무엇을 일으켰나 → 어떻게 드러났나 → 왜 그랬나 → 어떻게 고쳤나
@@ -40,5 +43,15 @@ Exchange WebSocket → Kafka → Flink → ClickHouse → 공식 캔들과 대�
 ## 스택
 
 Kafka · Apache Flink (Kubernetes Operator) · ClickHouse · Kubernetes
+관측: Prometheus · Grafana / 배포: ArgoCD / 분석: Superset
+
+**붙이는 순서를 지킨다.** 파이프라인이 검증까지 끝나기 전에 주변 도구를 먼저 붙이지 않는다.
+
+1. docker-compose로 수집기 → Flink 집계 → ClickHouse 적재 → 공식 캔들 대조까지 동작
+2. Prometheus + Grafana (장애 실험에 필요한 계측)
+3. K8s 이전 + Flink Kubernetes Operator, ArgoCD
+4. Superset
+
+Karpenter는 제외한다 — EKS와 실비용이 필요하고 이 프로젝트가 채우려는 공백과 축이 다르다.
 
 ClickHouse는 학습 목적이 겸해져 있다 — 실무에서 도입을 검토 중인 기술이라 여기서 먼저 다뤄본다.

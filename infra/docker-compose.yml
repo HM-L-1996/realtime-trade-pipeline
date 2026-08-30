@@ -1,0 +1,138 @@
+# 로컬 개발용 스택. K8s 이전 단계에서 처리 로직을 먼저 검증한다.
+#   Kafka (KRaft, 단일 브로커) → Flink (JM + TM) → ClickHouse
+#
+# 단일 브로커/단일 TaskManager 구성이라 여기서는 "정상 경로 + 처리 로직" 검증까지만 한다.
+# Pod 종료·HA·오토스케일 같은 실험은 K8s 이전 후에 다룬다.
+
+name: rtp
+
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: rtp-kafka
+    ports:
+      - "9092:9092"     # 호스트에서 접근 (수집기를 로컬 실행할 때)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:19092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Flink exactly-once 싱크는 Kafka 트랜잭션을 쓴다.
+      # 체크포인트 주기보다 짧으면 트랜잭션이 타임아웃되어 데이터가 유실된다 — 실험 대상.
+      KAFKA_TRANSACTION_MAX_TIMEOUT_MS: 900000
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  # 토픽을 명시적으로 만든다. auto-create에 맡기면 파티션 수가 조용히 1이 되어
+  # "파티션을 늘렸을 때 순서 보장" 실험의 전제가 흔들린다.
+  kafka-init:
+    image: apache/kafka:3.9.0
+    container_name: rtp-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 \
+        --create --if-not-exists --topic trades.raw \
+        --partitions 3 --replication-factor 1
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list
+      "
+    restart: "no"
+
+  jobmanager:
+    image: flink:1.20-scala_2.12-java17
+    container_name: rtp-jobmanager
+    ports:
+      - "8081:8081"     # Flink Web UI — 백프레셔·체크포인트 관측 지점
+    # Prometheus 리포터 jar은 이미지의 opt/ 에만 있어 lib/ 로 옮겨야 로드된다.
+    command: >
+      bash -c "cp /opt/flink/opt/flink-metrics-prometheus-*.jar /opt/flink/lib/ &&
+               /docker-entrypoint.sh jobmanager"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+        jobmanager.memory.process.size: 1600m
+        parallelism.default: 3
+        state.backend.type: rocksdb
+        state.backend.incremental: true
+        execution.checkpointing.interval: 10s
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+        execution.checkpointing.storage: filesystem
+        execution.checkpointing.dir: file:///flink/checkpoints
+        execution.checkpointing.savepoint-dir: file:///flink/savepoints
+    volumes:
+      # JM/TM이 같은 경로를 봐야 체크포인트 복구가 성립한다.
+      - ./flink/checkpoints:/flink/checkpoints
+      - ./flink/savepoints:/flink/savepoints
+      - ./flink/jobs:/flink/jobs
+
+  taskmanager:
+    image: flink:1.20-scala_2.12-java17
+    container_name: rtp-taskmanager
+    command: >
+      bash -c "cp /opt/flink/opt/flink-metrics-prometheus-*.jar /opt/flink/lib/ &&
+               /docker-entrypoint.sh taskmanager"
+    depends_on:
+      - jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: jobmanager
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+        taskmanager.memory.process.size: 4096m
+        taskmanager.numberOfTaskSlots: 3
+        state.backend.type: rocksdb
+        state.backend.incremental: true
+    volumes:
+      - ./flink/checkpoints:/flink/checkpoints
+      - ./flink/savepoints:/flink/savepoints
+      - ./flink/jobs:/flink/jobs
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: rtp-clickhouse
+    ports:
+      - "8123:8123"     # HTTP — 검증 쿼리는 여기로 던진다
+      - "9000:9000"     # native
+    environment:
+      CLICKHOUSE_DB: rtp
+      CLICKHOUSE_USER: rtp
+      CLICKHOUSE_PASSWORD: rtp
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  kafka-data:
+  clickhouse-data:

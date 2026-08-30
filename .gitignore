@@ -7,3 +7,11 @@ build/
 .vscode/
 __pycache__/
 *.pyc
+
+# Flink 로컬 런타임 산출물 (디렉터리 자체는 유지)
+infra/flink/checkpoints/*
+infra/flink/savepoints/*
+!infra/flink/*/.gitkeep
+
+# 개인 조사 메모 — public 저장소에 올리지 않는다
+docs/toss-api-analysis.md
