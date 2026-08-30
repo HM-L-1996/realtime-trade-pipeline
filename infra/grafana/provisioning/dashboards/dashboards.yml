@@ -1,0 +1,14 @@
+apiVersion: 1
+providers:
+  - name: rtp
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    # UI 에서 고친 것이 파일로 돌아오지는 않는다. 실험 중 임시 수정은 허용하되
+    # 남길 변경은 JSON 파일을 고쳐 커밋한다.
+    allowUiUpdates: true
+    updateIntervalSeconds: 15
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

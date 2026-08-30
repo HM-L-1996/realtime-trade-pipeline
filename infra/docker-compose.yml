@@ -53,7 +53,9 @@ services:
       - |
         set -euo pipefail
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic trades.raw --partitions 3 --replication-factor 1
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --describe --topic trades.raw
+        # 리플레이 대상. 원본 토픽에 되쓰면 Flink 가 earliest 부터 읽는 구성이라 루프가 된다.
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic trades.replay --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list
     restart: "no"
 
   jobmanager:

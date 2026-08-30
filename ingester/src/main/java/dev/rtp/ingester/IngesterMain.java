@@ -44,6 +44,7 @@ public final class IngesterMain {
     private final Config cfg;
     private final AtomicBoolean stop = new AtomicBoolean(false);
     private final Random random = new Random();
+    private double clockSkewMax;
 
     IngesterMain(Config cfg) {
         this.cfg = cfg;
@@ -174,7 +175,19 @@ public final class IngesterMain {
         Sequencer.Assignment a = sequencer.assign(t.symbol(), t.eventMs());
         long ingestMs = System.currentTimeMillis();
 
-        Metrics.SOURCE_LAG.observe(Math.max(0.0, (ingestMs - t.eventMs()) / 1000.0));
+        double lagS = (ingestMs - t.eventMs()) / 1000.0;
+        if (lagS < 0) {
+            // 체결 시각보다 먼저 받았다. 시계가 어긋난 것이다.
+            // 히스토그램에 0으로 뭉개면 이 현상이 관측에서 사라지므로 따로 센다.
+            Metrics.CLOCK_AHEAD.inc();
+            double skew = -lagS;
+            if (skew > clockSkewMax) {
+                clockSkewMax = skew;
+                Metrics.CLOCK_SKEW_MAX.set(skew);
+            }
+            lagS = 0.0;
+        }
+        Metrics.SOURCE_LAG.observe(lagS);
         if (a.outOfOrder()) {
             Metrics.OUT_OF_ORDER.labels(t.symbol()).inc();
         }

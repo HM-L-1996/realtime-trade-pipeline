@@ -1,0 +1,392 @@
+{
+  "uid": "rtp-pipeline",
+  "title": "체결 파이프라인",
+  "description": "수집기 → Kafka → Flink → ClickHouse. 장애 실험 중 무엇을 보고 알아채는지가 이 대시보드의 목적이다.",
+  "tags": ["rtp"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "symbol",
+        "label": "종목",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+        "query": "label_values(rtp_ingester_trades_total, symbol)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "파이프라인 상태",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "수집기 연결",
+      "description": "0 이면 소스가 끊긴 것이다. 이 구간의 체결은 영영 오지 않는다 - 스트림에 시퀀스 번호가 없어 되메울 수 없다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [{ "expr": "rtp_ingester_connected", "refId": "A", "legendFormat": "연결" }],
+      "options": {
+        "graphMode": "none",
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "끊김", "index": 0 }, "1": { "text": "연결됨", "index": 1 } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "TaskManager",
+      "description": "등록된 TaskManager 수. Pod 강제 종료 실험에서 이 값이 떨어졌다가 회복되는 시간이 곧 복구 시간이다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "targets": [{ "expr": "flink_jobmanager_numRegisteredTaskManagers", "refId": "A", "legendFormat": "TM" }],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "재연결 (1시간)",
+      "description": "잦으면 keepalive 나 네트워크 문제다. 재연결 사이 구간은 유실 가능 구간이다. (레이블 있는 카운터는 첫 이벤트 전까지 시계열이 없어 or vector(0) 으로 0을 표시한다 - 장애 대응 중 '0'과 '데이터 없음'을 헷갈리면 안 된다.)",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "sum(increase(rtp_ingester_reconnects_total[1h])) or vector(0)", "refId": "A", "legendFormat": "재연결" }],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 3 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "늦게 도착해 버려진 체결",
+      "description": "워터마크를 지나 도착해 윈도에 못 들어간 건수. 이 값이 0이 아니면 공식 캔들과 거래량이 어긋난다. 워터마크 지연을 늘리면 줄고, 대신 결과가 늦어진다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "targets": [{ "expr": "sum(flink_taskmanager_job_task_operator_lateTradesDropped) or vector(0)", "refId": "A", "legendFormat": "드롭" }],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "ClickHouse 적재 행",
+      "description": "Flink 싱크가 실제로 쓴 행 수. 잡은 살아 있는데 이 값이 멈추면 싱크 쪽 문제다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "targets": [{ "expr": "sum(flink_taskmanager_job_task_operator_clickhouseRowsWritten) or vector(0)", "refId": "A", "legendFormat": "행" }],
+      "options": {
+        "graphMode": "area",
+        "colorMode": "value",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "fieldConfig": {
+        "defaults": { "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
+        "overrides": []
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "수집",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "체결 수신율",
+      "description": "종목별 초당 체결 수. 장 시간대별 편차와 소스가 끊긴 구간이 여기서 보인다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "rate(rtp_ingester_trades_total{symbol=~\"$symbol\"}[1m])",
+          "refId": "A",
+          "legendFormat": "{{symbol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "소스 지연 (체결시각 → 수신시각)",
+      "description": "이 값이 워터마크 지연 설정보다 커지는 구간에서 체결이 버려진다. 두 값을 같이 보고 지연 허용치를 정한다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(rtp_ingester_source_lag_seconds_bucket[5m])) by (le))", "refId": "A", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(rtp_ingester_source_lag_seconds_bucket[5m])) by (le))", "refId": "B", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(rtp_ingester_source_lag_seconds_bucket[5m])) by (le))", "refId": "C", "legendFormat": "p99" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Kafka",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "컨슈머 lag",
+      "description": "Flink 가 유입을 따라가는지. 계속 커지면 처리량이 부족한 것이고, 그때 백프레셔가 어디서 걸리는지를 아래 패널과 함께 본다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "targets": [
+        {
+          "expr": "sum(kafka_consumergroup_lag{topic=~\"trades.*\"}) by (consumergroup, topic)",
+          "refId": "A",
+          "legendFormat": "{{consumergroup}} / {{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "파티션별 유입",
+      "description": "종목 수보다 파티션이 많으면 빈 파티션이 생긴다. 그 파티션은 워터마크를 멈춰 세우므로 withIdleness 가 필요하다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "targets": [
+        {
+          "expr": "rate(kafka_topic_partition_current_offset{topic=~\"trades.*\"}[1m])",
+          "refId": "A",
+          "legendFormat": "{{topic}} p{{partition}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Flink",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "체크포인트 소요 시간",
+      "description": "복구 실험의 기준값. 이 시간이 체크포인트 주기에 근접하면 체크포인트가 겹치기 시작한다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "flink_jobmanager_job_lastCheckpointDuration", "refId": "A", "legendFormat": "{{job_name}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "백프레셔",
+      "description": "태스크가 초당 몇 ms 를 하류 대기로 보냈는지. 1000 에 가까우면 그 태스크가 완전히 막힌 것이다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "targets": [
+        {
+          "expr": "avg(flink_taskmanager_job_task_backPressuredTimeMsPerSecond) by (task_name)",
+          "refId": "A",
+          "legendFormat": "{{task_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "max": 1000,
+          "custom": { "lineWidth": 2, "fillOpacity": 15, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "체크포인트 실패 누적",
+      "description": "늘어나면 싱크가 예외를 던지고 있다는 뜻이다. 잡은 RUNNING 으로 보여도 데이터가 안 나간다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "targets": [
+        { "expr": "flink_jobmanager_job_numberOfFailedCheckpoints", "refId": "A", "legendFormat": "실패" },
+        { "expr": "flink_jobmanager_job_numberOfCompletedCheckpoints", "refId": "B", "legendFormat": "성공" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "ClickHouse",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "활성 파트 수",
+      "description": "싱크 배치를 너무 작게 잡으면 파트가 폭증하고 결국 'too many parts' 로 적재가 막힌다. 배치 크기를 정하는 근거.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+      "targets": [{ "expr": "ClickHouseMetrics_PartsActive", "refId": "A", "legendFormat": "활성 파트" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "삽입 행 / 초",
+      "description": "ClickHouse 쪽에서 본 유입. Flink 싱크 카운터와 크게 어긋나면 한쪽이 실패하고 있다는 신호다.",
+      "datasource": { "type": "prometheus", "uid": "rtp-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "targets": [
+        { "expr": "rate(ClickHouseProfileEvents_InsertedRows[1m])", "refId": "A", "legendFormat": "삽입 행" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    }
+  ]
+}

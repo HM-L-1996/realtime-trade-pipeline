@@ -55,6 +55,24 @@ public final class Metrics {
             .register();
 
     /**
+     * 체결 시각보다 <b>먼저</b> 받은 건수. 즉 지연이 음수인 경우.
+     *
+     * <p>실측에서 실제로 나온다(2026-08-31, 약 150ms). 토스 서버와 우리 호스트의
+     * 시계가 어긋나 있다는 뜻이다. 히스토그램에 0으로 뭉개면 이 현상이 통째로 사라진다 -
+     * 이벤트타임 정확도를 논하려면 시계 오차의 크기를 알아야 하므로 따로 센다.
+     */
+    public static final Counter CLOCK_AHEAD = Counter.build()
+            .name("rtp_ingester_clock_ahead_total")
+            .help("체결 시각보다 먼저 수신한 건수 (소스 시계가 앞선 경우)")
+            .register();
+
+    /** 관측된 시계 어긋남의 최대치(초). 워터마크 여유를 정할 때 참고한다. */
+    public static final Gauge CLOCK_SKEW_MAX = Gauge.build()
+            .name("rtp_ingester_clock_skew_seconds_max")
+            .help("소스 시계가 앞선 최대 폭(초)")
+            .register();
+
+    /**
      * 역행한 타임스탬프. 소스가 순서를 보장하지 않는다는 증거가 되면
      * 워터마크 전략이 바뀐다.
      */

@@ -38,6 +38,19 @@ public final class OfficialCandleMain {
     private static final String TABLE = "rtp.candles_1m_official";
     private static final String COLUMNS = "symbol, window_start, open, high, low, close, volume";
 
+    /**
+     * 공식 캔들의 {@code timestamp} 는 <b>윈도 종료 시각</b>이다.
+     *
+     * <p>문서에는 없는 사실이고, 실측으로 확인했다(2026-08-31). 내 캔들과 그대로 대조하면
+     * 거래량이 평균 59% 어긋나고 차이가 <b>양방향</b>으로 난다 - 프레임 유실이면
+     * 한쪽으로만 어긋나야 하므로 정렬 문제라는 신호였다.
+     * 1분 밀어서 맞춰보니 <b>84개 윈도 전부 거래량·종가가 정확히 일치</b>했다.
+     *
+     * <p>컬럼 이름이 {@code window_start} 이므로 적재 시점에 시작 시각으로 바꾼다.
+     * 종료 시각을 그대로 넣으면 이 테이블을 쓰는 모든 쿼리가 조용히 1분씩 어긋난다.
+     */
+    private static final long CANDLE_INTERVAL_MS = 60_000L;
+
     public static void main(String[] args) throws Exception {
         Map<String, String> a = SyntheticMain.parseArgs(args);
         int count = Integer.parseInt(a.getOrDefault("count", "200"));
@@ -105,7 +118,8 @@ public final class OfficialCandleMain {
     /** 가격을 문자열로 넣는다. JSON 숫자로 보내면 파서가 double 을 거치며 정밀도가 깎인다. */
     static String toJson(OfficialCandleFetcher.OfficialCandle c) {
         return "{\"symbol\":" + ClickHouseHttp.quote(c.symbol())
-                + ",\"window_start\":" + c.windowStartMs()
+                // timestamp 는 윈도 종료 시각이다. 시작 시각으로 정규화한다.
+                + ",\"window_start\":" + (c.windowStartMs() - CANDLE_INTERVAL_MS)
                 + ",\"open\":" + ClickHouseHttp.quote(nz(c.open()))
                 + ",\"high\":" + ClickHouseHttp.quote(nz(c.high()))
                 + ",\"low\":" + ClickHouseHttp.quote(nz(c.low()))
