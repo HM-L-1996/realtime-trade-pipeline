@@ -46,14 +46,14 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    # command를 리스트로 준다. 문자열로 주면 compose가 단어 분리해서
+    # 줄바꿈 연속(\)이 깨지고, 인자가 유실된 채 exit 0으로 조용히 끝난다.
     entrypoint: ["/bin/bash", "-c"]
-    command: |
-      "
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 \
-        --create --if-not-exists --topic trades.raw \
-        --partitions 3 --replication-factor 1
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list
-      "
+    command:
+      - |
+        set -euo pipefail
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic trades.raw --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --describe --topic trades.raw
     restart: "no"
 
   jobmanager:
@@ -61,10 +61,9 @@ services:
     container_name: rtp-jobmanager
     ports:
       - "8081:8081"     # Flink Web UI — 백프레셔·체크포인트 관측 지점
-    # Prometheus 리포터 jar은 이미지의 opt/ 에만 있어 lib/ 로 옮겨야 로드된다.
-    command: >
-      bash -c "cp /opt/flink/opt/flink-metrics-prometheus-*.jar /opt/flink/lib/ &&
-               /docker-entrypoint.sh jobmanager"
+    # 리포터 jar은 /opt/flink/plugins/metrics-prometheus/ 에 있고
+    # Flink가 plugins/ 를 자동 로드하므로 별도 복사가 필요 없다.
+    command: jobmanager
     depends_on:
       kafka:
         condition: service_healthy
@@ -92,9 +91,7 @@ services:
   taskmanager:
     image: flink:1.20-scala_2.12-java17
     container_name: rtp-taskmanager
-    command: >
-      bash -c "cp /opt/flink/opt/flink-metrics-prometheus-*.jar /opt/flink/lib/ &&
-               /docker-entrypoint.sh taskmanager"
+    command: taskmanager
     depends_on:
       - jobmanager
     environment:
