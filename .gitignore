@@ -20,3 +20,6 @@ docs/working-notes.md
 # Python
 .venv/
 .pytest_cache/
+
+# Maven
+target/

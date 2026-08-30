@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>dev.rtp</groupId>
+    <artifactId>realtime-trade-pipeline</artifactId>
+    <version>0.1.0</version>
+  </parent>
+
+  <artifactId>common</artifactId>
+
+  <!--
+    수집기와 집계 잡이 공유하는 레코드 형식.
+    이 모듈이 존재하는 이유는 하나다 - 두 쪽의 형식이 갈리면
+    합성 데이터로 검증한 것이 실제 경로를 보증하지 못한다.
+  -->
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>

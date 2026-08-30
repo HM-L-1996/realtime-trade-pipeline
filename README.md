@@ -33,6 +33,12 @@ cp .env.example .env      # 토스증권 Open API 키를 채운다
 docker compose -f infra/docker-compose.yml up -d
 ```
 
+빌드는 로컬 JDK 없이 Docker 안에서 한다.
+
+```bash
+./mvnd.sh clean package
+```
+
 | 서비스 | 주소 | 용도 |
 |---|---|---|
 | Flink Web UI | http://localhost:8081 | 백프레셔·체크포인트 관측 |
@@ -55,6 +61,23 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.observability
 ```
 
 Grafana http://localhost:3000 · Prometheus http://localhost:9090
+
+### 장외 시간 검증
+
+국내장은 평일 09:00-15:30만 열린다. 장이 닫혀 있을 때는 합성 체결로 downstream을 돌린다.
+지연 도착과 중복을 의도적으로 주입할 수 있어 장애 실험의 작업 도구이기도 하다.
+
+```bash
+docker run --rm --network rtp_default -v "$PWD:/work" -w /work   -e KAFKA_BOOTSTRAP_SERVERS=kafka:19092 eclipse-temurin:17-jre   java -cp ingester/target/ingester-0.1.0.jar dev.rtp.ingester.SyntheticMain   --rate 40 --duration 60 --late-ratio 0.05 --dup-ratio 0.02
+```
+
+## 구성
+
+| 모듈 | 역할 |
+|---|---|
+| `common` | 수집기와 집계 잡이 공유하는 레코드 형식 |
+| `ingester` | 토스 WebSocket 체결 → Kafka. 합성 생성기 포함 |
+| `aggregator` | Flink 분봉 집계 잡 |
 
 ## 스택
 
