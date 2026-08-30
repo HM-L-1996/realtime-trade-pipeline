@@ -29,10 +29,32 @@ Exchange WebSocket (실시간 체결)
 ## 실행
 
 ```bash
+cp .env.example .env      # 토스증권 Open API 키를 채운다
 docker compose -f infra/docker-compose.yml up -d
 ```
 
-*(작성 예정)*
+| 서비스 | 주소 | 용도 |
+|---|---|---|
+| Flink Web UI | http://localhost:8081 | 백프레셔·체크포인트 관측 |
+| ClickHouse | http://localhost:8123 | 검증 쿼리 |
+| Kafka | localhost:9092 | 수집기 접속 |
+
+검증 쿼리는 뷰로 고정돼 있다.
+
+```sql
+-- 공식 캔들 대비 차이. missing=1 은 누락, write_count>1 은 중복 기록.
+SELECT * FROM rtp.candle_diff WHERE missing OR write_count > 1;
+```
+
+### 장애 실험용 계측 (선택)
+
+Prometheus·Grafana는 오버레이로 분리돼 있다. 실험 단계에서 켠다.
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.observability.yml up -d
+```
+
+Grafana http://localhost:3000 · Prometheus http://localhost:9090
 
 ## 스택
 

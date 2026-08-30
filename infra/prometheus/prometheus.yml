@@ -1,0 +1,21 @@
+# 장애 실험용 계측. 여기서 뽑는 값이 failure-notes.md의 근거가 된다.
+global:
+  scrape_interval: 5s        # 체크포인트 주기가 10s라 그보다 촘촘해야 의미가 있다
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: flink-jobmanager
+    static_configs:
+      - targets: ['jobmanager:9249']
+        labels: { component: jobmanager }
+
+  - job_name: flink-taskmanager
+    static_configs:
+      - targets: ['taskmanager:9249']
+        labels: { component: taskmanager }
+    # TM을 스케일아웃하면 여기 타깃을 늘려야 한다.
+    # (K8s 이전 후에는 서비스 디스커버리로 대체된다)
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

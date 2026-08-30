@@ -1,0 +1,47 @@
+# 관측 오버레이. 기본 스택과 분리해 둔 이유:
+# 파이프라인이 검증까지 끝나기 전에 주변 도구를 먼저 붙이지 않는다는 원칙(CLAUDE.md).
+# 장애 실험 단계에서 켠다.
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.observability.yml up -d
+#
+# Flink 쪽 Prometheus 리포터(9249)는 기본 compose에 이미 켜져 있다.
+# 스크레이프하는 쪽이 없으면 포트만 열려 있을 뿐이라 비용이 없고,
+# 나중에 켤 때 Flink를 재시작하지 않아도 된다.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: rtp-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 실험 전후를 비교하려면 과거 구간이 남아 있어야 한다
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: rtp-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    environment:
+      # 로컬 전용. 외부에 노출하지 않는다.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  prometheus-data:
+  grafana-data:
