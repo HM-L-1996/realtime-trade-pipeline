@@ -1,0 +1,9 @@
+.env
+*.log
+data/
+target/
+build/
+.idea/
+.vscode/
+__pycache__/
+*.pyc
