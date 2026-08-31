@@ -168,6 +168,38 @@ Docker Desktop VM 의 시계 드리프트로 보인다.
   이 값을 절대 기준으로 쓸 수 없다. 초기 구현이 `max(0, lag)` 으로 음수를 뭉개
   관측값의 94%를 0으로 만들고 있었다 — 지표가 현상을 가린 사례다
 
+## 재배포: 시작 오프셋과 savepoint
+
+`OffsetsInitializer.earliest()` 를 기본으로 두었다가 **재배포 한 번에 420개 윈도가 중복**됐다.
+토픽 전체를 다시 처리하는데 싱크가 멱등하지 않으니 이미 적재된 윈도가 또 쓰인다.
+
+기본을 `committedOffsets(EARLIEST)` 로 바꿨다. 커밋 오프셋이 없을 때(첫 배포)만
+처음부터 읽으므로 첫 실행과 재배포가 둘 다 의도대로 동작한다.
+재처리·리플레이 실험은 `--start-offsets earliest` 로 **매번 의식적으로 켠다.**
+감춰진 기본값이면 실수로 전체 재처리를 유발하고, 그 사실을 중복이 쌓인 뒤에야 알게 된다.
+
+### 그래도 savepoint 가 필요한 이유
+
+`committed` 는 **오프셋만** 이어받는다. 윈도 누산기 같은 **연산자 상태는 버려진다.**
+잡을 취소하는 순간 열려 있던 윈도의 부분 집계가 사라지고, 재시작하면 그 윈도는
+남은 체결만으로 다시 만들어져 **거래량이 모자란 캔들**이 된다.
+
+상태까지 넘기려면 savepoint 로 멈추고 거기서 재개해야 한다.
+
+```bash
+# 상태를 남기며 중단
+docker exec rtp-jobmanager flink stop --savepointPath /flink/savepoints <jobId>
+
+# 그 지점에서 재개 (오프셋 + 상태 함께)
+docker exec rtp-jobmanager flink run -d -s /flink/savepoints/savepoint-xxxx   /flink/jobs/aggregator-0.1.0.jar --topic trades.raw --group-id rtp-candle-live
+```
+
+savepoint 재개가 성립하려면 상태 연산자마다 `uid` 가 고정돼 있어야 한다.
+그래서 `candle-1m`, `clickhouse-candles`, `late-trades` 에 uid 를 박아 두었다.
+
+- 포기한 것: 절차가 한 단계 늘어난다
+- 얻은 것: 윈도 경계에서 잘린 캔들이 생기지 않는다
+
 ## 의도적으로 하지 않은 것
 
 - **전 종목 수집** — 처리량 자랑이 목적이 아니다

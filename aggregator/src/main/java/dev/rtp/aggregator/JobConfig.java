@@ -26,6 +26,7 @@ public record JobConfig(
         int sinkBatchSize,
         Duration sinkFlushInterval,
         boolean archiveTrades,
+        String startOffsets,
         String candlesTable,
         String runId) {
 
@@ -58,6 +59,11 @@ public record JobConfig(
                 Duration.ofSeconds(p.getLong("sink-flush-seconds", 5)),
                 // 원본 체결 보관. 적재량이 캔들의 수백 배라 끌 수 있게 둔다.
                 p.getBoolean("archive-trades", true),
+                // 기본은 커밋된 오프셋에서 이어 읽기. earliest 로 두면 재배포할 때마다
+                // 토픽 전체를 재처리하고, 싱크가 멱등하지 않으므로 같은 윈도가 다시 쓰인다
+                // (실제로 재배포 한 번에 420개 윈도가 중복됐다).
+                // 재처리·리플레이 실험이 필요하면 --start-offsets earliest 로 명시한다.
+                p.get("start-offsets", "committed"),
                 // 설정 비교 실험은 별도 테이블에 쓴다. 같은 테이블에 쓰면 서로 다른
                 // 조건의 결과가 섞이고, write_count 가 중복 신호로 오해된다.
                 p.get("candles-table", "rtp.candles_1m"),
@@ -72,9 +78,9 @@ public record JobConfig(
     /** 실행 조건을 로그와 runId 에 남긴다. 나중에 결과를 설정과 대조하기 위한 것. */
     public String describe() {
         return ("window=%ds watermarkDelay=%ds idleness=%ds allowedLateness=%ds "
-                + "topic=%s table=%s runId=%s").formatted(
+                + "topic=%s offsets=%s table=%s runId=%s").formatted(
                 windowSize.toSeconds(), watermarkDelay.toSeconds(),
                 idleness.toSeconds(), allowedLateness.toSeconds(),
-                topic, candlesTable, runId);
+                topic, startOffsets, candlesTable, runId);
     }
 }

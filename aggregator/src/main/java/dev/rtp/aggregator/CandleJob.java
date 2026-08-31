@@ -5,6 +5,7 @@ import dev.rtp.model.TradeRecord;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -56,8 +57,7 @@ public final class CandleJob {
                 .setBootstrapServers(cfg.bootstrapServers())
                 .setTopics(cfg.topic())
                 .setGroupId(cfg.groupId())
-                // 재처리 실험을 위해 처음부터 읽는다. 운영이라면 committed offset 을 쓴다.
-                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setStartingOffsets(startingOffsets(cfg))
                 .setDeserializer(new TradeRecordDeserializer())
                 .build();
 
@@ -118,6 +118,30 @@ public final class CandleJob {
             s = s.withIdleness(cfg.idleness());
         }
         return s;
+    }
+
+    /**
+     * 시작 오프셋 전략.
+     *
+     * <p>기본은 <b>커밋된 오프셋에서 이어 읽기</b>다. earliest 로 두면 재배포할 때마다
+     * 토픽 전체를 재처리하는데, 이 파이프라인의 싱크는 멱등하지 않으므로 이미 적재된
+     * 윈도가 그대로 한 번 더 쓰인다. 실제로 재배포 한 번에 420개 윈도가 중복됐다.
+     *
+     * <p>{@code committedOffsets(EARLIEST)} 는 커밋 오프셋이 없을 때(첫 배포)만
+     * 처음부터 읽는다. 그래서 첫 실행과 재배포가 모두 의도대로 동작한다.
+     *
+     * <p>재처리·리플레이 실험에는 {@code --start-offsets earliest} 를 명시한다.
+     * 감춰진 기본값이 아니라 <b>매번 의식적으로 켜는 스위치</b>여야 한다.
+     */
+    static OffsetsInitializer startingOffsets(JobConfig cfg) {
+        return switch (cfg.startOffsets()) {
+            case "earliest" -> OffsetsInitializer.earliest();
+            case "latest" -> OffsetsInitializer.latest();
+            case "committed" -> OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST);
+            default -> throw new IllegalArgumentException(
+                    "--start-offsets 는 committed|earliest|latest 중 하나여야 한다: "
+                            + cfg.startOffsets());
+        };
     }
 
     private CandleJob() {}

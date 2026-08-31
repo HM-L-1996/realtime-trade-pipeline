@@ -39,6 +39,17 @@ docker compose -f infra/docker-compose.yml up -d
 ./mvnd.sh clean package
 ```
 
+집계 잡 제출. 기본은 커밋된 오프셋에서 이어 읽는다 —
+`earliest` 로 두면 재배포할 때마다 토픽 전체를 재처리해 같은 윈도가 다시 적재된다.
+
+```bash
+cp aggregator/target/aggregator-0.1.0.jar infra/flink/jobs/
+docker exec rtp-jobmanager flink run -d /flink/jobs/aggregator-0.1.0.jar   --topic trades.raw --group-id rtp-candle-live --watermark-delay-seconds 5
+
+# 재처리·리플레이 실험은 명시적으로 켠다
+#   --start-offsets earliest
+```
+
 | 서비스 | 주소 | 용도 |
 |---|---|---|
 | Flink Web UI | http://localhost:8081 | 백프레셔·체크포인트 관측 |
