@@ -77,9 +77,18 @@ public final class CandleJob {
                 .uid("late-trades")
                 .sinkTo(new DiscardingSink<>());
 
-        candles.sinkTo(ClickHouseCandleSink.of(cfg))
+        candles.sinkTo(ClickHouseSink.candles(cfg))
                 .name("clickhouse-candles")
                 .uid("clickhouse-candles");
+
+        // 원본 체결 보관. recv_seq 공백으로 소스 유실을 재기 위한 것이다.
+        // 이게 없으면 공식 캔들과의 차이가 내 버그인지 소스 유실인지 끝까지 구분되지 않는다.
+        // (--archive-trades false 로 끌 수 있다. 적재량이 캔들의 수백 배다.)
+        if (cfg.archiveTrades()) {
+            trades.sinkTo(ClickHouseSink.trades(cfg))
+                    .name("clickhouse-trades")
+                    .uid("clickhouse-trades");
+        }
 
         env.execute("rtp-candle-1m");
     }

@@ -50,6 +50,13 @@ docker compose -f infra/docker-compose.yml up -d
 ```sql
 -- 공식 캔들 대비 차이. missing=1 은 누락, write_count>1 은 중복 기록.
 SELECT * FROM rtp.candle_diff WHERE missing OR write_count > 1;
+
+-- 소스 유실률. recv_seq 는 연결별로 1씩 증가하므로 공백이 곧 유실이다.
+-- 공식 캔들과 어긋났을 때 "내 버그" 와 "소스 유실" 을 가르는 근거.
+SELECT * FROM rtp.source_continuity;
+
+-- Kafka→Flink 구간 유실 확인. raw_trades 와 candle_trades 가 다르면 그 구간 문제다.
+SELECT * FROM rtp.trade_count_check WHERE diff != 0;
 ```
 
 ### 장애 실험용 계측 (선택)

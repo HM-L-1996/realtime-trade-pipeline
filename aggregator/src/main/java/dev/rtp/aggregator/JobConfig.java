@@ -25,6 +25,7 @@ public record JobConfig(
         String clickhousePassword,
         int sinkBatchSize,
         Duration sinkFlushInterval,
+        boolean archiveTrades,
         String runId) {
 
     public static JobConfig from(String[] args) {
@@ -54,6 +55,8 @@ public record JobConfig(
                 p.get("clickhouse-password", envOr("CLICKHOUSE_PASSWORD", "rtp")),
                 p.getInt("sink-batch-size", 500),
                 Duration.ofSeconds(p.getLong("sink-flush-seconds", 5)),
+                // 원본 체결 보관. 적재량이 캔들의 수백 배라 끌 수 있게 둔다.
+                p.getBoolean("archive-trades", true),
                 p.get("run-id", "run-" + System.currentTimeMillis()));
     }
 
