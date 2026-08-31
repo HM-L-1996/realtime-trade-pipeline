@@ -84,6 +84,17 @@ services:
         execution.checkpointing.storage: filesystem
         execution.checkpointing.dir: file:///flink/checkpoints
         execution.checkpointing.savepoint-dir: file:///flink/savepoints
+        # 재시작 전략. 고정 지연 10회x5초로 두었다가 TaskManager 재생성 때
+        # 50초를 다 쓰고 잡이 FAILED 로 끝났다. 컨테이너/Pod 이 돌아오는 시간이
+        # 그보다 길다. 지수 백오프로 바꿔 오래 기다릴 수 있게 한다.
+        restart-strategy.type: exponential-delay
+        restart-strategy.exponential-delay.initial-backoff: 5 s
+        restart-strategy.exponential-delay.max-backoff: 2 min
+        restart-strategy.exponential-delay.backoff-multiplier: 2.0
+        # 이 시간 동안 장애가 없으면 백오프를 초기화한다.
+        # 없으면 한 번 길어진 백오프가 영원히 유지된다.
+        restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+        restart-strategy.exponential-delay.jitter-factor: 0.1
     volumes:
       # JM/TM이 같은 경로를 봐야 체크포인트 복구가 성립한다.
       - ./flink/checkpoints:/flink/checkpoints
@@ -101,8 +112,11 @@ services:
         jobmanager.rpc.address: jobmanager
         metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
         metrics.reporter.prom.port: 9249
-        taskmanager.memory.process.size: 4096m
-        taskmanager.numberOfTaskSlots: 3
+        taskmanager.memory.process.size: 6144m
+        # 슬롯 6개. 3개면 잡 하나가 전부 차지해 설정 비교 실험을 동시에 띄울 수 없다
+        # (NoResourceAvailableException). 같은 입력에 조건만 바꿔 두 잡을 나란히
+        # 돌리는 것이 validation.md 표를 채우는 방법이므로 여유가 필요하다.
+        taskmanager.numberOfTaskSlots: 6
         state.backend.type: rocksdb
         state.backend.incremental: true
   # 수집기. 자격 증명은 저장소 루트 .env 에서 온다 (커밋되지 않는다).

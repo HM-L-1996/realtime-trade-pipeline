@@ -61,7 +61,7 @@ public class ClickHouseSink<T> implements Sink<T>, Serializable {
 
     /** 집계된 분봉. */
     public static ClickHouseSink<Candle> candles(JobConfig cfg) {
-        return new ClickHouseSink<>(cfg, "rtp.candles_1m",
+        return new ClickHouseSink<>(cfg, cfg.candlesTable(),
                 "symbol, window_start, open, high, low, close, volume, trade_count, run_id",
                 "clickhouseCandleRows", ClickHouseSink::candleJson);
     }

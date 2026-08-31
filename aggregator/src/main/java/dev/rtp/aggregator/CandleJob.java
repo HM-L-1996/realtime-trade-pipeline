@@ -3,7 +3,6 @@ package dev.rtp.aggregator;
 import dev.rtp.model.Candle;
 import dev.rtp.model.TradeRecord;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -45,7 +44,13 @@ public final class CandleJob {
         log.info("CandleJob 시작 {}", cfg.describe());
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.setRestartStrategy(RestartStrategies.fixedDelayRestart(10, 5_000L));
+        // 재시작 전략은 잡이 정하지 않는다. 클러스터 설정(FLINK_PROPERTIES)에 둔다 -
+        // 이건 잡 로직이 아니라 운영 정책이고, 환경마다 달라야 한다.
+        //
+        // 여기 fixedDelayRestart(10, 5s) 를 박아 뒀다가 실제로 당했다:
+        // TaskManager 를 재생성했더니 10회 x 5초 = 50초를 다 쓰고 잡이 FAILED 로 끝났다.
+        // 컨테이너가 돌아오는 데 그보다 오래 걸렸기 때문이다.
+        // K8s 에서 Pod 이 재스케줄되면 그대로 재현된다.
 
         KafkaSource<TradeRecord> source = KafkaSource.<TradeRecord>builder()
                 .setBootstrapServers(cfg.bootstrapServers())

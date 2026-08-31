@@ -26,6 +26,7 @@ public record JobConfig(
         int sinkBatchSize,
         Duration sinkFlushInterval,
         boolean archiveTrades,
+        String candlesTable,
         String runId) {
 
     public static JobConfig from(String[] args) {
@@ -57,6 +58,9 @@ public record JobConfig(
                 Duration.ofSeconds(p.getLong("sink-flush-seconds", 5)),
                 // 원본 체결 보관. 적재량이 캔들의 수백 배라 끌 수 있게 둔다.
                 p.getBoolean("archive-trades", true),
+                // 설정 비교 실험은 별도 테이블에 쓴다. 같은 테이블에 쓰면 서로 다른
+                // 조건의 결과가 섞이고, write_count 가 중복 신호로 오해된다.
+                p.get("candles-table", "rtp.candles_1m"),
                 p.get("run-id", "run-" + System.currentTimeMillis()));
     }
 
@@ -68,8 +72,9 @@ public record JobConfig(
     /** 실행 조건을 로그와 runId 에 남긴다. 나중에 결과를 설정과 대조하기 위한 것. */
     public String describe() {
         return ("window=%ds watermarkDelay=%ds idleness=%ds allowedLateness=%ds "
-                + "topic=%s runId=%s").formatted(
+                + "topic=%s table=%s runId=%s").formatted(
                 windowSize.toSeconds(), watermarkDelay.toSeconds(),
-                idleness.toSeconds(), allowedLateness.toSeconds(), topic, runId);
+                idleness.toSeconds(), allowedLateness.toSeconds(),
+                topic, candlesTable, runId);
     }
 }

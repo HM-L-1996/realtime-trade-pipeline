@@ -121,6 +121,45 @@ rtp-candle-live   lag=451      <- 실제로 도는 잡
 ---
 
 
+### TaskManager 를 재시작했더니 잡이 복구되지 못하고 FAILED 로 끝났다
+
+**일으킨 방법:** 설정 비교 실험을 하려는데 슬롯이 부족했다(`NoResourceAvailableException`).
+TaskManager 슬롯을 3개에서 6개로 늘리려고 컨테이너를 재생성했다.
+체크포인트에서 복구될 것으로 기대했다.
+
+**증상:** 3분을 기다려도 잡이 RUNNING 으로 돌아오지 않았다. 상태는 `FAILED`.
+정작 TaskManager 는 정상 등록되어 슬롯 6개가 비어 있었다.
+
+**원인:**
+
+```
+org.apache.flink.runtime.JobException: Recovery is suppressed by
+FixedDelayRestartBackoffTimeStrategy(maxNumberRestartAttempts=10, backoffTimeMS=5000)
+```
+
+잡 코드에 `RestartStrategies.fixedDelayRestart(10, 5_000L)` 을 박아 뒀다.
+**10회 x 5초 = 50초.** 컨테이너가 이미지 기동 → 등록까지 그보다 오래 걸렸고,
+잡은 그 전에 시도를 다 쓰고 포기했다. 재시작 이력을 보면
+11:40:13, 11:40:18, 11:40:24 로 5초 간격으로 소진하고 끝났다.
+
+**대응:** 두 가지를 고쳤다.
+
+1. **지수 백오프로 변경** — 초기 5초, 최대 2분, 배수 2.0.
+   10분간 장애가 없으면 백오프를 초기화한다(없으면 한 번 길어진 백오프가 영원히 유지된다).
+2. **재시작 전략을 잡 코드에서 클러스터 설정으로 옮겼다.**
+   이건 잡 로직이 아니라 운영 정책이고, 환경마다 달라야 한다.
+   로컬 컨테이너와 K8s Pod 의 복귀 시간은 다르다.
+
+**남은 문제:** 이 설정으로 실제 복구되는지는 아직 확인하지 않았다. 다시 죽여봐야 한다.
+
+> **K8s 이전 전에 이걸 만난 것이 다행이다.** Pod 재스케줄은 컨테이너 재생성보다 느리다.
+> `failure-notes` 의 "TaskManager Pod 강제 종료" 실험을 K8s 에서 처음 했다면
+> 클러스터 문제로 오진했을 것이다 — 실제로는 잡 설정 문제였다.
+> CLAUDE.md 의 "docker-compose 로 먼저 동작시킨 뒤 K8s 로 옮긴다" 가 값을 한 사례다.
+
+---
+
+
 ## (템플릿)
 
 ### [실험명]

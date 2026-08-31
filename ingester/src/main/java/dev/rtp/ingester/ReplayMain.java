@@ -74,9 +74,17 @@ public final class ReplayMain {
                 ? new Random(Long.parseLong(a.get("seed")))
                 : new Random();
 
+        // 특정 연결의 레코드만 재생한다.
+        // 토픽 앞부분에 합성 데이터가 섞여 있으면 이벤트타임에 큰 구멍이 생기고,
+        // 워터마크가 그 지점에서 껑충 뛰어 지연 주입 효과가 묻힌다.
+        // 설정 비교 실험은 **연속된 실제 구간**에서만 의미가 있다.
+        String connFilter = a.getOrDefault("source-conn-id", "");
+        // 앞에서부터 건너뛸 개수. 구간을 뒤로 옮길 때 쓴다.
+        int skip = Integer.parseInt(a.getOrDefault("skip-records", "0"));
+
         String bootstrap = envOr("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
 
-        List<TradeRecord> loaded = load(bootstrap, sourceTopic, maxRecords);
+        List<TradeRecord> loaded = load(bootstrap, sourceTopic, maxRecords, connFilter, skip);
         if (loaded.isEmpty()) {
             log.warn("{} 에서 읽은 레코드가 없다. 재생할 것이 없다.", sourceTopic);
             return;
@@ -172,8 +180,9 @@ public final class ReplayMain {
         return out;
     }
 
-    /** 소스 토픽을 처음부터 끝까지 읽어 메모리에 담는다. */
-    private static List<TradeRecord> load(String bootstrap, String topic, int max) {
+    /** 소스 토픽을 처음부터 읽어 메모리에 담는다. connFilter 가 있으면 그 연결만 남긴다. */
+    private static List<TradeRecord> load(String bootstrap, String topic, int max,
+                                          String connFilter, int skip) {
         Properties p = new Properties();
         p.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
         p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
@@ -186,6 +195,7 @@ public final class ReplayMain {
 
         List<TradeRecord> out = new ArrayList<>();
         int malformed = 0;
+        int skipped = 0;
 
         try (KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(p)) {
             consumer.subscribe(Collections.singletonList(topic));
@@ -202,7 +212,15 @@ public final class ReplayMain {
                         continue;
                     }
                     try {
-                        out.add(MAPPER.readValue(r.value(), TradeRecord.class));
+                        TradeRecord t = MAPPER.readValue(r.value(), TradeRecord.class);
+                        if (!connFilter.isEmpty() && !connFilter.equals(t.connId())) {
+                            continue;
+                        }
+                        if (skipped < skip) {
+                            skipped++;
+                            continue;
+                        }
+                        out.add(t);
                     } catch (Exception e) {
                         malformed++;
                     }
