@@ -13,6 +13,10 @@ services:
     ports:
       - "9092:9092"     # 호스트에서 접근 (수집기를 로컬 실행할 때)
     environment:
+      # 이게 없으면 Kafka 는 /tmp/kafka-logs 에 쓰고 아래 볼륨은 비어 있게 된다.
+      # 실제로 그 상태였다 - 볼륨 4KB, /tmp 148MB. 컨테이너를 재생성하면
+      # 전부 사라지는데 compose 파일만 보면 영속되는 것처럼 보인다.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
