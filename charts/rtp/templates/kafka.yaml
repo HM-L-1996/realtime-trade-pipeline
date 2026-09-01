@@ -50,7 +50,9 @@ spec:
             */}}
             - { name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data }
             - { name: KAFKA_NODE_ID, value: "1" }
-            - { name: KAFKA_PROCESS_ROLES, value: broker,controller }
+            {{/* 값에 쉼표가 있으면 반드시 따옴표. flow 매핑에서 쉼표는 항목 구분자라
+                 broker,controller 가 value:broker + controller:null 로 쪼개진다. */}}
+            - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
               value: 1@kafka-0.kafka-headless.{{ .Release.Namespace }}.svc.cluster.local:9093
             - { name: KAFKA_LISTENERS, value: "PLAINTEXT://:9092,CONTROLLER://:9093" }
