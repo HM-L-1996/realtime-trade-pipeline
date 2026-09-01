@@ -1,0 +1,100 @@
+# 실험: 유입이 처리량을 넘으면 백프레셔가 어디서 발생하는가
+#
+# **별도 토픽(trades.replay)을 쓴다.** 운영 토픽(trades.raw)에 합성 부하를 쏟으면
+# 실데이터 검증이 오염된다 - 합성 캔들과 실제 체결이 섞여 공식 캔들과 안 맞는다.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: load-gen
+  namespace: rtp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: synth
+          image: rtp-ingester:0.1.0
+          imagePullPolicy: Never
+          command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
+          # rate 를 아주 높게 잡으면 sleep 이 0이 되어 사실상 무제한으로 뿌린다.
+          args: ["--rate", "200000", "--duration", "600", "--symbols", "005930,000660", "--seed", "7"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.rtp.svc.cluster.local:9092
+            - name: KAFKA_TRADES_TOPIC
+              value: trades.replay
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits: { memory: 1Gi }
+---
+# 일부러 좁게 잡은 컨슈머. 슬롯 1개, 병렬도 1.
+# 넉넉하면 백프레셔가 안 걸려 실험이 성립하지 않는다.
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: exp-backpressure
+  namespace: rtp
+spec:
+  image: rtp-aggregator:0.1.0
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "1"
+    parallelism.default: "1"
+    state.backend.type: hashmap
+    execution.checkpointing.interval: 10s
+    execution.checkpointing.dir: s3://warehouse/flink-exp/checkpoints
+    execution.checkpointing.savepoint-dir: s3://warehouse/flink-exp/savepoints
+    s3.endpoint: http://minio.rtp.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    restart-strategy.type: exponential-delay
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+  jobManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  taskManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: 1
+    upgradeMode: stateless
+    state: running
+    args:
+      - --topic
+      - trades.replay
+      - --group-id
+      - exp-backpressure
+      - --start-offsets
+      - earliest
+      - --bootstrap-servers
+      - kafka.rtp.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.rtp.svc.cluster.local:8123
+      - --candles-table
+      - rtp.candles_exp
+      - --run-id
+      - bp
+      - --idleness-seconds
+      - "10"
+      # 원본 체결까지 적재해 싱크에 부하를 준다. 병목이 어디인지 보려는 것이다.
+      - --archive-trades
+      - "true"
+      # 배치를 작게 해 HTTP 왕복을 늘린다. 싱크가 병목이 되도록 유도한다.
+      - --sink-batch-size
+      - "50"

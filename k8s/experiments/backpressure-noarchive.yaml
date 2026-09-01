@@ -1,0 +1,69 @@
+---
+# 일부러 좁게 잡은 컨슈머. 슬롯 1개, 병렬도 1.
+# 넉넉하면 백프레셔가 안 걸려 실험이 성립하지 않는다.
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: exp-bp-noarchive
+  namespace: rtp
+spec:
+  image: rtp-aggregator:0.1.0
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "1"
+    parallelism.default: "1"
+    state.backend.type: hashmap
+    execution.checkpointing.interval: 10s
+    execution.checkpointing.dir: s3://warehouse/flink-exp/checkpoints
+    execution.checkpointing.savepoint-dir: s3://warehouse/flink-exp/savepoints
+    s3.endpoint: http://minio.rtp.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    restart-strategy.type: exponential-delay
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+  jobManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  taskManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: 1
+    upgradeMode: stateless
+    state: running
+    args:
+      - --topic
+      - trades.replay
+      - --group-id
+      - exp-bp-noarchive
+      - --start-offsets
+      - earliest
+      - --bootstrap-servers
+      - kafka.rtp.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.rtp.svc.cluster.local:8123
+      - --candles-table
+      - rtp.candles_exp
+      - --run-id
+      - bp-noarchive
+      - --idleness-seconds
+      - "10"
+      # 원본 체결까지 적재해 싱크에 부하를 준다. 병목이 어디인지 보려는 것이다.
+      - --archive-trades
+      - "false"
+      # 배치를 작게 해 HTTP 왕복을 늘린다. 싱크가 병목이 되도록 유도한다.
+      - --sink-batch-size
+      - "50"
