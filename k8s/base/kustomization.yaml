@@ -7,6 +7,8 @@ resources:
   - kafka/kafka.yaml
   - kafka/topics-job.yaml
   - clickhouse/clickhouse.yaml
+  - minio/minio.yaml
+  - iceberg/rest-catalog.yaml
 
 # 스키마 SQL 은 compose 와 **같은 파일**을 쓴다.
 # 복사본을 두면 한쪽만 고쳐지고, 그러면 두 환경의 검증 결과를 비교할 수 없다.

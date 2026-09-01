@@ -27,6 +27,8 @@
     <slf4j.version>2.0.16</slf4j.version>
     <prometheus.version>0.16.0</prometheus.version>
     <junit.version>5.11.4</junit.version>
+    <!-- Iceberg 싱크. Flink 버전별 런타임 아티팩트가 따로 있다. -->
+    <iceberg.version>1.9.1</iceberg.version>
   </properties>
 
   <dependencyManagement>

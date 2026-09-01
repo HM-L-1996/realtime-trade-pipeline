@@ -1,0 +1,61 @@
+# Iceberg REST 카탈로그.
+#
+# 카탈로그가 왜 필요한가: Iceberg 테이블은 데이터 파일(Parquet)과 **메타데이터**로
+# 나뉘고, "이 테이블의 현재 스냅샷이 무엇인가" 를 누군가 관리해야 한다.
+# 그 역할이 카탈로그다. HadoopCatalog(파일시스템), Glue, Nessie 등이 있는데
+# REST 카탈로그를 쓰면 Hadoop 의존성 없이 된다 - fat jar 이 384MB 에서
+# 102MB 로 줄었다.
+#
+# 커밋 원자성도 카탈로그가 보장한다. Flink 가 체크포인트마다 스냅샷을 커밋할 때
+# 그 교체가 원자적이어야 exactly-once 가 성립한다.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg-rest
+  namespace: rtp
+spec:
+  selector:
+    app: iceberg-rest
+  ports:
+    - { name: rest, port: 8181, targetPort: 8181 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-rest
+  namespace: rtp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iceberg-rest
+  template:
+    metadata:
+      labels:
+        app: iceberg-rest
+    spec:
+      containers:
+        - name: rest
+          image: apache/iceberg-rest-fixture:1.9.1
+          ports:
+            - { containerPort: 8181, name: rest }
+          env:
+            - { name: CATALOG_WAREHOUSE, value: "s3://warehouse/" }
+            - { name: CATALOG_IO__IMPL, value: org.apache.iceberg.aws.s3.S3FileIO }
+            - { name: CATALOG_S3_ENDPOINT, value: "http://minio:9000" }
+            # MinIO 는 path-style 접근이어야 한다. 기본 virtual-host 방식은
+            # bucket.minio:9000 으로 붙으려 해서 DNS 가 안 잡힌다.
+            - { name: CATALOG_S3_PATH__STYLE__ACCESS, value: "true" }
+            - { name: AWS_REGION, value: us-east-1 }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+          readinessProbe:
+            httpGet: { path: /v1/config, port: 8181 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 1Gi }

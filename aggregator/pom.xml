@@ -55,6 +55,28 @@
          clickhouse-jdbc 를 fat jar 에 넣으면 셰이딩 충돌이 잦고,
          여기서는 배치·플러시·재시도가 명시적으로 보이는 편이 낫다. -->
 
+    <!--
+      Iceberg 싱크. ClickHouse 싱크와 나란히 달아 exactly-once 와 at-least-once 를
+      같은 입력으로 비교하기 위한 것이다. Iceberg 싱크는 체크포인트에 맞춰
+      스냅샷을 커밋하므로 장애 시 커밋되지 않은 데이터가 버려진다 -
+      ClickHouse 싱크는 재처리분이 그대로 다시 쓰인다.
+    -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-flink-runtime-1.20</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+    <!--
+      S3(MinIO) 접근에 hadoop-aws 를 쓰지 않는다. Hadoop 을 끌어오면 fat jar 이
+      384MB 가 되고(실측) 클래스 로딩 충돌 위험도 커진다.
+      Iceberg 자체 S3FileIO + AWS SDK v2 번들이면 Hadoop 없이 된다.
+    -->
+    <dependency>
+      <groupId>org.apache.iceberg</groupId>
+      <artifactId>iceberg-aws-bundle</artifactId>
+      <version>${iceberg.version}</version>
+    </dependency>
+
     <dependency>
       <groupId>org.apache.flink</groupId>
       <artifactId>flink-test-utils</artifactId>
