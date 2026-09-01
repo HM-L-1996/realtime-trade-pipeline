@@ -1,0 +1,32 @@
+# 합성 체결 생성기. 장애 실험용 부하를 만든다.
+#
+# 실험은 "정확도" 가 아니라 "거동" 을 보는 것이므로 장 시간이 필요 없다.
+# 오히려 rate 를 통제할 수 있어 백프레셔 실험에는 합성이 낫다.
+#
+#   kubectl apply -f k8s/experiments/synthetic-job.yaml
+#   kubectl delete -f k8s/experiments/synthetic-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: synthetic
+  namespace: rtp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: synth
+          image: rtp-ingester:0.1.0
+          imagePullPolicy: Never
+          command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
+          args: ["--rate", "30", "--duration", "900", "--symbols", "005930,000660", "--seed", "101"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.rtp.svc.cluster.local:9092
+            - name: KAFKA_TRADES_TOPIC
+              value: trades.raw
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
