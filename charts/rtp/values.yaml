@@ -1,0 +1,68 @@
+# 기본값은 로컬 kind 클러스터 기준이다.
+# 운영이라면 credentials 는 외부에서 주입해야 한다 -
+# docs/working-notes.md 의 "K8s 이전 시 반드시 바꿀 것" 참고.
+
+kafka:
+  image: apache/kafka:3.9.0
+  storage: 5Gi
+  # 파티션을 명시한다. auto-create 에 맡기면 조용히 1이 되어
+  # "파티션을 늘렸을 때 종목별 순서" 실험의 전제가 무너진다.
+  topics:
+    - name: trades.raw
+      partitions: 3
+    - name: trades.replay
+      partitions: 3
+  resources:
+    requests: { cpu: 200m, memory: 1Gi }
+    limits: { memory: 2Gi }
+
+clickhouse:
+  image: clickhouse/clickhouse-server:24.8
+  storage: 10Gi
+  db: rtp
+  user: rtp
+  password: rtp
+  resources:
+    requests: { cpu: 300m, memory: 1Gi }
+    limits: { memory: 3Gi }
+
+minio:
+  enabled: true
+  image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+  mcImage: quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z
+  storage: 10Gi
+  accessKey: rtpadmin
+  secretKey: rtpadmin123
+  bucket: warehouse
+
+icebergRest:
+  # Iceberg 싱크를 붙이기 전까지는 쓰이지 않는다. 기본 꺼 둔다 -
+  # 쓰이지 않는 컴포넌트가 떠 있으면 "정리 안 된 상태" 로 읽힌다.
+  enabled: false
+  image: apache/iceberg-rest-fixture:1.9.1
+
+flink:
+  enabled: true
+  image: rtp-aggregator:0.1.0
+  # kind load 로 노드에 적재한 로컬 이미지다. 레지스트리에서 받으려 하면 실패한다.
+  imagePullPolicy: Never
+  version: v1_20
+  parallelism: 3
+  taskSlots: 3
+  jobManager:
+    memory: 1600m
+    cpu: 0.5
+  taskManager:
+    memory: 2048m
+    cpu: 1
+  job:
+    topic: trades.raw
+    groupId: rtp-candle-k8s
+    runId: k8s-wm5
+    # validation.md 의 "설정 변경에 따른 정확도 변화" 표가 이 값들을 바꿔가며 나온다.
+    watermarkDelaySeconds: 5
+    idlenessSeconds: 10
+    allowedLatenessSeconds: 0
+    archiveTrades: true
+  checkpoint:
+    intervalSeconds: 10

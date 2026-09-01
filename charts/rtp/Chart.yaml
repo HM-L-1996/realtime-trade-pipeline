@@ -1,0 +1,6 @@
+apiVersion: v2
+name: rtp
+description: 거래소 실시간 체결 파이프라인 — Kafka · Flink · ClickHouse · MinIO
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

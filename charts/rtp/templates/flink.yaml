@@ -1,0 +1,134 @@
+{{- if .Values.flink.enabled }}
+{{/*
+  Flink 잡이 자기 TaskManager Pod 과 ConfigMap(리더 선출용)을 만들 권한.
+  Operator 헬름 차트는 자기 네임스페이스에만 RBAC 을 만들므로 여기에 직접 만든다.
+  없으면 JobManager 가 TaskManager 를 못 띄우고 Pod 이 Pending 에 걸린다.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flink
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: flink
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/finalizers"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flink
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: flink
+subjects:
+  - kind: ServiceAccount
+    name: flink
+    namespace: {{ .Release.Namespace }}
+---
+{{/*
+  분봉 집계 잡. Application 모드.
+  compose 에서 `flink run` 으로 제출하던 것을 선언적 배포로 바꾼 것이다.
+  Operator 는 이 CR 을 "원하는 상태" 로 보고 수렴시킨다.
+*/}}
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: candle-1m
+spec:
+  image: {{ .Values.flink.image }}
+  imagePullPolicy: {{ .Values.flink.imagePullPolicy }}
+  flinkVersion: {{ .Values.flink.version }}
+  serviceAccount: flink
+
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: {{ .Values.flink.taskSlots | quote }}
+    parallelism.default: {{ .Values.flink.parallelism | quote }}
+
+    state.backend.type: rocksdb
+    state.backend.incremental: "true"
+    execution.checkpointing.interval: {{ printf "%ds" (int .Values.flink.checkpoint.intervalSeconds) }}
+    execution.checkpointing.mode: EXACTLY_ONCE
+    execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    execution.checkpointing.dir: s3://{{ .Values.minio.bucket }}/flink/checkpoints
+    execution.checkpointing.savepoint-dir: s3://{{ .Values.minio.bucket }}/flink/savepoints
+
+    s3.endpoint: http://minio.{{ .Release.Namespace }}.svc.cluster.local:9000
+    {{/* MinIO 는 path-style 이어야 한다. virtual-host 방식은 bucket.minio:9000 을 찾는다. */}}
+    s3.path.style.access: "true"
+    s3.access-key: {{ .Values.minio.accessKey | quote }}
+    s3.secret-key: {{ .Values.minio.secretKey | quote }}
+
+    {{/*
+      고정 지연(10회 x 5초 = 50초)으로 두었다가 TaskManager 재생성 때
+      컨테이너가 돌아오기 전에 시도를 다 쓰고 잡이 FAILED 로 끝났다.
+      K8s 는 Pod 재스케줄이 더 느리므로 여유가 더 필요하다.
+    */}}
+    restart-strategy.type: exponential-delay
+    restart-strategy.exponential-delay.initial-backoff: 5 s
+    restart-strategy.exponential-delay.max-backoff: 2 min
+    restart-strategy.exponential-delay.backoff-multiplier: "2.0"
+    restart-strategy.exponential-delay.reset-backoff-threshold: 10 min
+    restart-strategy.exponential-delay.jitter-factor: "0.1"
+
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+
+    high-availability.type: kubernetes
+    high-availability.storageDir: s3://{{ .Values.minio.bucket }}/flink/ha
+
+  jobManager:
+    resource:
+      memory: {{ .Values.flink.jobManager.memory | quote }}
+      cpu: {{ .Values.flink.jobManager.cpu }}
+  taskManager:
+    resource:
+      memory: {{ .Values.flink.taskManager.memory | quote }}
+      cpu: {{ .Values.flink.taskManager.cpu }}
+
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: {{ .Values.flink.parallelism }}
+    {{/*
+      spec 이 바뀌면 savepoint 를 뜬 뒤 그 지점에서 재개한다.
+      실측에서 cancel 후 재시작은 진행 중이던 윈도가 -67% 잘렸고
+      savepoint 재개는 손실 0 이었다.
+    */}}
+    upgradeMode: savepoint
+    state: running
+    args:
+      - --topic
+      - {{ .Values.flink.job.topic | quote }}
+      - --group-id
+      - {{ .Values.flink.job.groupId | quote }}
+      - --bootstrap-servers
+      - kafka.{{ .Release.Namespace }}.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.{{ .Release.Namespace }}.svc.cluster.local:8123
+      - --clickhouse-user
+      - {{ .Values.clickhouse.user | quote }}
+      - --clickhouse-password
+      - {{ .Values.clickhouse.password | quote }}
+      - --watermark-delay-seconds
+      - {{ .Values.flink.job.watermarkDelaySeconds | quote }}
+      - --idleness-seconds
+      - {{ .Values.flink.job.idlenessSeconds | quote }}
+      - --allowed-lateness-seconds
+      - {{ .Values.flink.job.allowedLatenessSeconds | quote }}
+      - --archive-trades
+      - {{ .Values.flink.job.archiveTrades | quote }}
+      - --run-id
+      - {{ .Values.flink.job.runId | quote }}
+{{- end }}

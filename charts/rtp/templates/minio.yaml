@@ -1,20 +1,15 @@
-# S3 호환 오브젝트 스토리지. Iceberg 웨어하우스로 쓴다.
-#
-# 왜 필요한가: Iceberg 는 공유 스토리지를 전제로 한다. Flink JobManager 와
-# TaskManager 가 서로 다른 노드에 뜨는데, kind 의 기본 StorageClass(local-path)는
-# ReadWriteOnce 라 노드를 넘어 공유되지 않는다. 파일시스템 카탈로그로는 안 되고
-# 오브젝트 스토리지가 있어야 한다.
-#
-# 실무의 S3 구성과 같은 모양이라 나중에 그대로 옮길 수 있다.
----
+{{- if .Values.minio.enabled }}
+{{/*
+  S3 호환 오브젝트 스토리지. Flink 체크포인트/세이브포인트를 여기 둔다.
+  JM/TM 이 서로 다른 노드에 뜨는데 kind 기본 StorageClass 는 ReadWriteOnce 라
+  노드를 넘어 공유되지 않는다. 오브젝트 스토리지가 유일한 선택지다.
+*/}}
 apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: rtp
 spec:
-  selector:
-    app: minio
+  selector: { app: minio }
   ports:
     - { name: api, port: 9000, targetPort: 9000 }
     - { name: console, port: 9001, targetPort: 9001 }
@@ -23,33 +18,27 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: minio-credentials
-  namespace: rtp
 type: Opaque
 stringData:
-  # 로컬 전용 자격 증명. 운영이라면 외부에서 주입해야 한다.
-  # working-notes.md 의 "K8s 이전 시 반드시 바꿀 것" 목록에 있다.
-  accesskey: rtpadmin
-  secretkey: rtpadmin123
+  accesskey: {{ .Values.minio.accessKey | quote }}
+  secretkey: {{ .Values.minio.secretKey | quote }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: minio
-  namespace: rtp
 spec:
   serviceName: minio
   replicas: 1
   selector:
-    matchLabels:
-      app: minio
+    matchLabels: { app: minio }
   template:
     metadata:
-      labels:
-        app: minio
+      labels: { app: minio }
     spec:
       containers:
         - name: minio
-          image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+          image: {{ .Values.minio.image }}
           args: ["server", "/data", "--console-address", ":9001"]
           env:
             - name: MINIO_ROOT_USER
@@ -75,14 +64,15 @@ spec:
         accessModes: [ReadWriteOnce]
         resources:
           requests:
-            storage: 10Gi
+            storage: {{ .Values.minio.storage }}
 ---
-# 버킷 생성. Iceberg 는 버킷이 없으면 웨어하우스를 만들지 못한다.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: minio-bucket-init
-  namespace: rtp
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   ttlSecondsAfterFinished: 3600
   backoffLimit: 10
@@ -91,7 +81,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: mc
-          image: quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z
+          image: {{ .Values.minio.mcImage }}
           env:
             - name: AK
               valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
@@ -104,5 +94,6 @@ spec:
               until mc alias set local http://minio:9000 "$AK" "$SK" >/dev/null 2>&1; do
                 echo "MinIO 대기..."; sleep 5
               done
-              mc mb --ignore-existing local/warehouse
+              mc mb --ignore-existing local/{{ .Values.minio.bucket }}
               mc ls local/
+{{- end }}

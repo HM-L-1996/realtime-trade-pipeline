@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+spec:
+  selector: { app: clickhouse }
+  ports:
+    - { name: http, port: 8123, targetPort: 8123 }
+    - { name: native, port: 9000, targetPort: 9000 }
+    - { name: metrics, port: 9363, targetPort: 9363 }
+---
+{{/*
+  스키마 SQL 은 차트가 소유한다(files/clickhouse/). compose 도 같은 파일을 마운트한다 -
+  복사본을 두면 한쪽만 고쳐지고 두 환경의 검증 결과를 비교할 수 없다.
+  체크섬을 어노테이션에 넣어 SQL 이 바뀌면 Pod 이 롤링되게 한다.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-initdb
+data:
+{{ (.Files.Glob "files/clickhouse/*.sql").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+data:
+{{ (.Files.Glob "files/clickhouse-config/*.xml").AsConfig | indent 2 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: { app: clickhouse }
+  template:
+    metadata:
+      labels: { app: clickhouse }
+      annotations:
+        checksum/initdb: {{ (.Files.Glob "files/clickhouse/*.sql").AsConfig | sha256sum }}
+    spec:
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image }}
+          ports:
+            - { containerPort: 8123, name: http }
+            - { containerPort: 9000, name: native }
+            - { containerPort: 9363, name: metrics }
+          env:
+            - { name: CLICKHOUSE_DB, value: {{ .Values.clickhouse.db | quote }} }
+            - { name: CLICKHOUSE_USER, value: {{ .Values.clickhouse.user | quote }} }
+            - { name: CLICKHOUSE_PASSWORD, value: {{ .Values.clickhouse.password | quote }} }
+            - { name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1" }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+            {{/*
+              ClickHouse 는 데이터 디렉터리가 비어 있을 때만 이 SQL 을 실행한다.
+              PVC 가 이미 차 있으면 건너뛴다 - 스키마를 바꾸면 수동 적용이 필요하다.
+            */}}
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            {{/*
+              디렉터리째 마운트하면 이미지의 docker_related_config.xml 이 가려지고
+              listen_host 가 사라져 컨테이너 밖에서 접근이 끊긴다. compose 에서 실제로 당했다.
+              subPath 로 파일 하나만 얹는다.
+            */}}
+            - { name: chconfig, mountPath: /etc/clickhouse-server/config.d/prometheus.xml, subPath: prometheus.xml, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /ping, port: 8123 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources: {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+      volumes:
+        - name: initdb
+          configMap: { name: clickhouse-initdb }
+        - name: chconfig
+          configMap: { name: clickhouse-config }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.clickhouse.storage }}

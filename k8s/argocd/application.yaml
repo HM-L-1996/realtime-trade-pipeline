@@ -1,0 +1,57 @@
+# ArgoCD Application. 이 저장소의 Helm 차트를 클러스터에 수렴시킨다.
+#
+# GitOps 로 얻는 것: 클러스터 상태의 근거가 **저장소**가 된다.
+# kubectl apply 로 손댄 것은 다음 동기화에서 되돌아간다(selfHeal).
+# "누가 언제 무엇을 바꿨나" 가 git log 로 답해진다.
+#
+# 적용:
+#   kubectl apply -f k8s/argocd/application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rtp
+  namespace: argocd
+  finalizers:
+    # 앱을 지울 때 배포한 리소스도 같이 지운다. 없으면 고아 리소스가 남는다.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/HM-L-1996/realtime-trade-pipeline.git
+    targetRevision: main
+    path: charts/rtp
+    helm:
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rtp
+
+  syncPolicy:
+    automated:
+      # 저장소에서 사라진 리소스를 클러스터에서도 지운다.
+      prune: true
+      # 손으로 고친 것을 되돌린다. GitOps 의 요점이다.
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # StatefulSet 의 volumeClaimTemplates 는 변경 불가 필드가 많다.
+      # 차이가 나도 동기화를 막지 않도록 서버사이드 적용을 쓴다.
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  ignoreDifferences:
+    # Flink Operator 가 FlinkDeployment 의 status 와 spec 일부를 채워 넣는다.
+    # 그걸 drift 로 보면 영원히 OutOfSync 가 된다.
+    - group: flink.apache.org
+      kind: FlinkDeployment
+      jsonPointers:
+        - /spec/job/state
+        - /spec/flinkConfiguration

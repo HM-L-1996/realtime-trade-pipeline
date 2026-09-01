@@ -204,12 +204,15 @@ services:
       nofile: { soft: 262144, hard: 262144 }
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      # 스키마 SQL 은 Helm 차트가 소유한다. Helm 의 .Files 는 차트 밖을 못 읽지만
+      # compose 는 그런 제약이 없어서, 차트를 단일 소스로 두고 여기서 참조한다.
+      # 복사본을 두면 한쪽만 고쳐지고 두 환경의 검증 결과를 비교할 수 없다.
+      - ../charts/rtp/files/clickhouse:/docker-entrypoint-initdb.d:ro
       # 디렉터리째 마운트하면 이미지가 갖고 있는 docker_related_config.xml 이 가려진다.
       # 그 파일이 listen_host 를 모든 인터페이스로 여는 역할이라, 덮어쓰면
       # ClickHouse 가 루프백에만 바인딩되어 컨테이너 밖에서 접근이 끊긴다.
       # 파일 하나만 얹는다.
-      - ./clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      - ../charts/rtp/files/clickhouse-config/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
       interval: 10s

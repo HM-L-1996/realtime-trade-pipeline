@@ -32,23 +32,36 @@ helm install flink-kubernetes-operator flink-operator-repo/flink-kubernetes-oper
 > Operator 버전은 `https://downloads.apache.org/flink/` 에 **현재 배포 중인 것만** 있다.
 > 지난 버전은 404 가 난다(archive.apache.org 로 옮겨간다). 설치 전에 목록을 확인할 것.
 
-## 매니페스트 적용
+## 배포 — Helm 차트 + ArgoCD
+
+매니페스트는 `charts/rtp` Helm 차트 하나로 모았다. kustomize 를 쓰다가 옮겼는데,
+**두 소스를 병행하면 어느 쪽이 진짜인지 모르게 되기 때문**이다.
 
 ```bash
-kubectl kustomize --load-restrictor LoadRestrictionsNone k8s/base | kubectl apply -f -
+# ArgoCD 설치
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.13.2/manifests/install.yaml
+
+# 저장소를 클러스터에 연결
+kubectl apply -f k8s/argocd/application.yaml
 ```
 
-### 왜 `--load-restrictor` 가 필요한가
+이후로는 **저장소가 클러스터 상태의 근거**다. `kubectl apply` 로 손댄 것은
+다음 동기화에서 되돌아간다(`selfHeal: true`). "누가 언제 무엇을 바꿨나" 가
+`git log` 로 답해진다.
 
-ClickHouse 스키마 SQL 을 `infra/clickhouse/init/` 에서 그대로 가져다 ConfigMap 으로 만든다.
-compose 와 **같은 파일**을 써야 두 환경의 스키마가 갈리지 않는다 -
-복사본을 두면 한쪽만 고쳐지고, 그러면 검증 결과를 비교할 수 없다.
+차트만 직접 쓰려면:
 
-kustomize 는 기본적으로 루트 밖 파일 참조를 막는다. 그래서 이 플래그가 필요하다.
-`kubectl apply -k` 에는 이 플래그가 없으므로 `kubectl kustomize | kubectl apply -f -` 로 넘긴다.
+```bash
+helm template rtp charts/rtp --namespace rtp | kubectl apply -f -
+```
 
-> ArgoCD 로 배포할 때는 `argocd-cm` 에 `kustomize.buildOptions: --load-restrictor LoadRestrictionsNone`
-> 를 넣어야 한다. 잊으면 ConfigMap 생성 단계에서 실패한다.
+### 스키마 SQL 을 차트가 소유한다
+
+`charts/rtp/files/clickhouse/*.sql` 이 단일 소스이고 compose 가 그걸 마운트한다.
+Helm 의 `.Files` 도, kustomize 도 **차트/루트 밖 파일을 못 읽는다.**
+그래서 소유권을 차트로 옮기고 compose 가 참조하는 쪽으로 뒤집었다 -
+복사본을 두면 한쪽만 고쳐지고 두 환경의 검증 결과를 비교할 수 없다.
 
 ## 스키마 변경 시 주의
 
