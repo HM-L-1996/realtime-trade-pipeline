@@ -67,8 +67,14 @@ spec:
     s3.endpoint: http://minio.{{ .Release.Namespace }}.svc.cluster.local:9000
     {{/* MinIO 는 path-style 이어야 한다. virtual-host 방식은 bucket.minio:9000 을 찾는다. */}}
     s3.path.style.access: "true"
-    s3.access-key: {{ .Values.minio.accessKey | quote }}
-    s3.secret-key: {{ .Values.minio.secretKey | quote }}
+    {{/*
+      s3.access-key / s3.secret-key 를 여기 쓰지 않는다. flinkConfiguration 은
+      CR 에 평문으로 남고 `kubectl get flinkdeployment -o yaml` 로 그대로 보인다.
+      MinIO 와 Iceberg 는 Secret + secretKeyRef 를 쓰면서 여기만 평문이면
+      같은 차트 안에서 기준이 갈린다.
+      아래 podTemplate 이 Secret 을 AWS 표준 환경변수로 주입하고,
+      s3-fs-presto 가 기본 자격증명 체인에서 읽는다.
+    */}}
 
     {{/*
       고정 지연(10회 x 5초 = 50초)으로 두었다가 TaskManager 재생성 때
@@ -87,6 +93,25 @@ spec:
 
     high-availability.type: kubernetes
     high-availability.storageDir: s3://{{ .Values.minio.bucket }}/flink/ha
+
+  {{/*
+    자격증명을 Secret 에서 환경변수로 주입한다. JM/TM 양쪽에 필요하다 -
+    체크포인트는 TM 이 쓰고 메타데이터는 JM 이 쓴다.
+  */}}
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            {{/* JobConfig 가 이 이름으로 환경변수를 읽는다. args 로 넘기면 CR 에 평문으로 남는다. */}}
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
 
   jobManager:
     resource:
@@ -117,10 +142,7 @@ spec:
       - kafka.{{ .Release.Namespace }}.svc.cluster.local:9092
       - --clickhouse-url
       - http://clickhouse.{{ .Release.Namespace }}.svc.cluster.local:8123
-      - --clickhouse-user
-      - {{ .Values.clickhouse.user | quote }}
-      - --clickhouse-password
-      - {{ .Values.clickhouse.password | quote }}
+      {{/* 사용자/비밀번호는 args 가 아니라 환경변수로 온다. 위 podTemplate 참고. */}}
       - --watermark-delay-seconds
       - {{ .Values.flink.job.watermarkDelaySeconds | quote }}
       - --idleness-seconds

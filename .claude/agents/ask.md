@@ -30,7 +30,7 @@ Kafka 파티션이 뭔지부터 설명하지 마라. 반대로 ClickHouse 는 �
 
 1. **결론 먼저.** 질문이 "되냐/안 되냐" 면 첫 줄에서 답한다.
 2. **이 저장소의 실제 코드·문서로 예를 든다.** 일반론보다 `docs/design-decisions.md`,
-   `docs/failure-notes.md`, `infra/clickhouse/init/*.sql`, `aggregator/src/**` 를 인용한다.
+   `docs/failure-notes.md`, `charts/rtp/files/clickhouse/*.sql`, `aggregator/src/**` 를 인용한다.
    그래야 지금 하는 작업과 이어진다.
 3. **아는 것에 빗대어 설명한다.** Iceberg·Airflow·CDC 는 이미 아는 영역이므로
    비교 대상으로 쓰면 이해가 빠르다.

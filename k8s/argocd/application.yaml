@@ -48,13 +48,18 @@ spec:
         maxDuration: 3m
 
   ignoreDifferences:
-    # Flink Operator 가 FlinkDeployment 의 status 와 spec 일부를 채워 넣는다.
-    # 그걸 drift 로 보면 영원히 OutOfSync 가 된다.
+    # Operator 는 잡을 suspend/resume 하면서 이 필드를 직접 바꾼다.
+    # 그것만 제외한다.
+    #
+    # 처음에는 /spec/flinkConfiguration 도 통째로 제외했는데 **근거가 없었다.**
+    # 라이브 CR 을 떠 보니 23개 키가 전부 차트에서 온 것이고 Operator 가 추가한
+    # 키는 하나도 없었다. 그 상태로 두면 체크포인트 모드·재시작 전략 같은 것이
+    # 손으로 바뀌어도 selfHeal 이 되돌리지 않는다 -
+    # "kubectl 로 손댄 것은 되돌아간다" 는 이 문서 위쪽 주장이 거짓이 된다.
     - group: flink.apache.org
       kind: FlinkDeployment
       jsonPointers:
         - /spec/job/state
-        - /spec/flinkConfiguration
 
     # StatefulSet 의 volumeClaimTemplates 에 Kubernetes 가 기본값을 채워 넣는다 -
     # volumeMode: Filesystem, apiVersion, kind, status.phase. 차트에는 그게 없으니

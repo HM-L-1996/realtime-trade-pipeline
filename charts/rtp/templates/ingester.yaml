@@ -1,0 +1,119 @@
+{{- if .Values.ingester.enabled }}
+{{/*
+  토스 WebSocket 수집기.
+  **자격 증명은 차트에 없다.** Secret 을 배포 전에 따로 만들어야 한다:
+
+    kubectl create secret generic toss-credentials -n rtp \
+      --from-env-file=.env
+
+  public 저장소이므로 키가 values.yaml 에 들어가면 안 된다.
+  이 Secret 이 없으면 Pod 이 CreateContainerConfigError 로 멈춘다 - 조용히
+  기본값으로 도는 것보다 낫다.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingester
+spec:
+  selector: { app: ingester }
+  ports:
+    - { name: metrics, port: 9200, targetPort: 9200 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingester
+spec:
+  {{/*
+    replicas 는 반드시 1이다. 토스는 계정당 동시 연결 2개 제한이고,
+    두 Pod 이 같은 종목을 구독하면 같은 체결을 두 번 넣는다.
+    수평 확장하려면 종목을 나눠 구독해야 한다 - 지금 구조는 그걸 지원하지 않는다.
+  */}}
+  replicas: 1
+  strategy:
+    {{/*
+      Recreate 를 쓴다. RollingUpdate 면 새 Pod 이 뜨는 동안 연결이 2개가 되어
+      동시 연결 제한에 걸리고, 그 사이 체결이 중복 적재된다.
+      대신 재배포 중 수신 공백이 생긴다 - 소스에 시퀀스가 없어 그 구간은 되메울 수 없다.
+    */}}
+    type: Recreate
+  selector:
+    matchLabels: { app: ingester }
+  template:
+    metadata:
+      labels: { app: ingester }
+    spec:
+      containers:
+        - name: ingester
+          image: {{ .Values.ingester.image }}
+          imagePullPolicy: {{ .Values.ingester.imagePullPolicy }}
+          ports:
+            - { containerPort: 9200, name: metrics }
+          env:
+            - name: TOSS_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: toss-credentials, key: TOSS_CLIENT_ID } }
+            - name: TOSS_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: toss-credentials, key: TOSS_CLIENT_SECRET } }
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.{{ .Release.Namespace }}.svc.cluster.local:9092
+            - { name: KAFKA_TRADES_TOPIC, value: {{ .Values.ingester.topic | quote }} }
+            - { name: SYMBOLS, value: {{ .Values.ingester.symbols | quote }} }
+            - { name: METRICS_PORT, value: "9200" }
+          readinessProbe:
+            httpGet: { path: /metrics, port: 9200 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+{{- end }}
+---
+{{- if .Values.officialCandles.enabled }}
+{{/*
+  공식 캔들 수집기 = 정답지. 이것이 없으면 validation.md 를 쓸 수 없다.
+  수집기와 같은 이미지를 쓰고 진입점만 다르다.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: official-candles
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: official-candles }
+  template:
+    metadata:
+      labels: { app: official-candles }
+    spec:
+      containers:
+        - name: fetcher
+          image: {{ .Values.ingester.image }}
+          imagePullPolicy: {{ .Values.ingester.imagePullPolicy }}
+          command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.OfficialCandleMain"]
+          args:
+            - --interval-seconds
+            - "60"
+            {{/*
+              진행 중인 분봉은 부분 집계일 수 있다. 그걸 정답지로 저장하면
+              내 집계가 맞는데도 틀린 것처럼 보인다.
+            */}}
+            - --settle-minutes
+            - "3"
+            - --count
+            - "200"
+          env:
+            - name: TOSS_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: toss-credentials, key: TOSS_CLIENT_ID } }
+            - name: TOSS_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: toss-credentials, key: TOSS_CLIENT_SECRET } }
+            - name: CLICKHOUSE_URL
+              value: http://clickhouse.{{ .Release.Namespace }}.svc.cluster.local:8123
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+            - { name: SYMBOLS, value: {{ .Values.ingester.symbols | quote }} }
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 512Mi }
+{{- end }}

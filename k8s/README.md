@@ -50,9 +50,11 @@ kubectl apply -f k8s/argocd/application.yaml
 다음 동기화에서 되돌아간다(`selfHeal: true`). "누가 언제 무엇을 바꿨나" 가
 `git log` 로 답해진다.
 
-차트만 직접 쓰려면:
+ArgoCD 없이 차트만 쓰려면 **네임스페이스를 먼저 만들어야 한다.**
+차트에는 Namespace 리소스가 없다 - ArgoCD 의 `CreateNamespace=true` 에 맡기고 있다.
 
 ```bash
+kubectl create namespace rtp
 helm template rtp charts/rtp --namespace rtp | kubectl apply -f -
 ```
 
@@ -78,19 +80,19 @@ kubectl delete pvc data-clickhouse-0 -n rtp
 
 ## 잡 배포 (Flink Operator, Application 모드)
 
+잡 이미지는 저장소에 없으므로 **먼저 만들어 클러스터 노드에 적재해야 한다.**
+ArgoCD 가 차트를 동기화해도 이미지가 없으면 `ErrImageNeverPull` 로 멈춘다.
+
 ```bash
-# 1. jar 빌드 -> 이미지 -> 클러스터 노드에 적재
 ./mvnd.sh -pl aggregator -am package -DskipTests
 docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.0 .
 kind load docker-image rtp-aggregator:0.1.0 --name rtp
 
-# 2. RBAC (Operator 헬름 차트는 자기 네임스페이스에만 만든다)
-kubectl apply -f k8s/flink/rbac.yaml
-
-# 3. 잡
-kubectl apply -f k8s/flink/candle-job.yaml
 kubectl get flinkdeployment -n rtp -w
 ```
+
+RBAC(ServiceAccount/Role/RoleBinding)과 FlinkDeployment 는 차트에 들어 있다
+(`charts/rtp/templates/flink.yaml`). 따로 apply 할 것이 없다.
 
 ### compose 와 달라진 것
 

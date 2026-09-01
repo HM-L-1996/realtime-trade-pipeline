@@ -1,0 +1,7 @@
+# 수집기 이미지. 저장소 루트를 컨텍스트로 빌드한다.
+#   docker build -f ingester/Dockerfile.k8s -t rtp-ingester:0.1.0 .
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY ingester/target/ingester-0.1.0.jar /app/ingester.jar
+EXPOSE 9200
+ENTRYPOINT ["java", "-jar", "/app/ingester.jar"]

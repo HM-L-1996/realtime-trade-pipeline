@@ -41,6 +41,20 @@ icebergRest:
   enabled: false
   image: apache/iceberg-rest-fixture:1.9.1
 
+# 수집기. 자격 증명은 차트에 없다 - 배포 전에 Secret 을 따로 만든다:
+#   kubectl create secret generic toss-credentials -n rtp --from-env-file=.env
+# public 저장소이므로 키가 values.yaml 에 들어가면 안 된다.
+ingester:
+  enabled: true
+  image: rtp-ingester:0.1.0
+  imagePullPolicy: Never
+  topic: trades.raw
+  symbols: "005930,000660"
+
+# 공식 캔들 수집기 = 정답지. 없으면 validation.md 를 쓸 수 없다.
+officialCandles:
+  enabled: true
+
 flink:
   enabled: true
   image: rtp-aggregator:0.1.0
@@ -48,7 +62,11 @@ flink:
   imagePullPolicy: Never
   version: v1_20
   parallelism: 3
-  taskSlots: 3
+  # 슬롯을 병렬도보다 넉넉히 둔다. 3개면 잡 하나가 전부 차지해
+  # 설정 비교 실험(같은 입력에 조건만 바꿔 두 잡을 나란히)을 띄울 수 없다.
+  # compose 에서 3 -> 6 으로 올린 것과 같은 이유다. validation.md 의 표를
+  # 채우는 방법 자체가 이 여유에 달려 있다.
+  taskSlots: 6
   jobManager:
     memory: 1600m
     cpu: 0.5
