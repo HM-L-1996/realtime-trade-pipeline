@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rtp
+
+resources:
+  - namespace.yaml
+  - kafka/kafka.yaml
+  - kafka/topics-job.yaml
+  - clickhouse/clickhouse.yaml
+
+# 스키마 SQL 은 compose 와 **같은 파일**을 쓴다.
+# 복사본을 두면 한쪽만 고쳐지고, 그러면 두 환경의 검증 결과를 비교할 수 없다.
+configMapGenerator:
+  - name: clickhouse-initdb
+    files:
+      - ../../infra/clickhouse/init/01_schema.sql
+      - ../../infra/clickhouse/init/02_views.sql
+      - ../../infra/clickhouse/init/03_source_loss.sql
+  - name: clickhouse-config
+    files:
+      - prometheus.xml=../../infra/clickhouse/config.d/prometheus.xml
+
+generatorOptions:
+  # 해시 접미사를 끄면 ConfigMap 내용이 바뀌어도 Pod 이 안 바뀐다.
+  # 켜 두면 SQL 을 고쳤을 때 Pod 이 롤링된다 - 그게 의도다.
+  disableNameSuffixHash: false
