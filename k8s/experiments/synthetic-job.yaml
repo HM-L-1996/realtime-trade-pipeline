@@ -21,7 +21,7 @@ spec:
           image: rtp-ingester:0.1.0
           imagePullPolicy: Never
           command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
-          args: ["--rate", "30", "--duration", "900", "--symbols", "005930,000660", "--seed", "101"]
+          args: ["--rate", "30", "--duration", "3600", "--symbols", "005930,000660", "--seed", "101"]
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: kafka.rtp.svc.cluster.local:9092

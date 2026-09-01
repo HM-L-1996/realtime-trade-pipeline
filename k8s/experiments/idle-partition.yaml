@@ -1,0 +1,77 @@
+# 실험: 유휴 파티션이 워터마크를 멈춰 세우는가
+#
+# 종목 2개 / 파티션 3개라 파티션 하나는 **항상 비어 있다.**
+# Flink 워터마크는 모든 소스 분할의 **최소값**을 따라가므로,
+# 유휴 파티션을 처리하지 않으면 워터마크가 전진하지 못하고
+# 윈도가 영원히 닫히지 않는다.
+#
+# 대조군: 운영 잡(candle-1m)은 --idleness-seconds 10 이다.
+# 이 잡은 0(비활성)으로 두고 결과를 비교한다.
+# 별도 테이블에 써서 운영 캔들과 섞이지 않게 한다.
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: exp-idle0
+  namespace: rtp
+spec:
+  image: rtp-aggregator:0.1.0
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    parallelism.default: "1"
+    state.backend.type: hashmap
+    execution.checkpointing.interval: 10s
+    execution.checkpointing.dir: s3://warehouse/flink-exp/checkpoints
+    execution.checkpointing.savepoint-dir: s3://warehouse/flink-exp/savepoints
+    s3.endpoint: http://minio.rtp.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    restart-strategy.type: exponential-delay
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+  jobManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  taskManager:
+    resource: { memory: "1024m", cpu: 0.5 }
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: 1
+    upgradeMode: stateless
+    state: running
+    args:
+      - --topic
+      - trades.raw
+      - --group-id
+      - exp-idle0
+      - --start-offsets
+      - earliest
+      - --bootstrap-servers
+      - kafka.rtp.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.rtp.svc.cluster.local:8123
+      - --candles-table
+      - rtp.candles_exp
+      - --run-id
+      - idle0
+      # 유휴 파티션 처리 비활성. 이것이 실험의 전부다.
+      - --idleness-seconds
+      - "0"
+      - --watermark-delay-seconds
+      - "5"
+      - --archive-trades
+      - "false"
