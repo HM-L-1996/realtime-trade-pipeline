@@ -35,8 +35,9 @@ public record TradeRecord(
         @JsonProperty("conn_id") String connId,
         @JsonProperty("recv_seq") long recvSeq) {
 
-    /** 같은 체결을 두 번 본 것인지 판별하는 키. */
-    public String idempotencyKey() {
-        return symbol + '|' + eventMs + '|' + seqInMs;
-    }
+    // 멱등키는 (symbol, eventMs, seqInMs) 다. 그 조합을 만드는 메서드를 여기 두었었는데
+    // 어디에서도 호출되지 않는 죽은 코드였다. 실제 키는 ClickHouse 의
+    // trades_raw ORDER BY 에 있고, 중복 판정은 SQL 로 한다(source_continuity 뷰).
+    // 코드에 키를 만드는 시늉만 있고 쓰이지 않으면 "중복 제거가 되고 있다" 는
+    // 잘못된 인상을 준다.
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.rtp.model.TradeRecord;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.metrics.Counter;
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.flink.util.Collector;
@@ -16,7 +17,16 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>깨진 레코드 하나가 잡 전체를 죽이면 안 된다.</b> 스트리밍 잡은 장기 실행
  * 프로세스이고, 여기서 예외를 던지면 재시작 → 같은 레코드 → 재시작 루프에 빠진다.
- * 세어 두고 넘긴다. 몇 건이 버려졌는지는 메트릭으로 남는다.
+ * 세어 두고 넘긴다.
+ *
+ * <p>거르는 것은 두 가지다.
+ * <ul>
+ *   <li>JSON 자체가 깨진 것 → {@code malformedJson}
+ *   <li>JSON 은 멀쩡한데 가격/수량이 비어 있는 것 → {@code missingFields}.
+ *       이걸 통과시키면 하류 {@code CandleAggregate} 가 숫자 파싱에서 터지고,
+ *       그게 곧 재시작 루프다. <b>거르는 위치가 계측이 가능한 곳이어야 한다</b> -
+ *       AggregateFunction 은 RuntimeContext 를 못 얻어 메트릭을 붙일 수 없다.
+ * </ul>
  */
 public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema<TradeRecord> {
 
@@ -24,12 +34,19 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
     private static final Logger log = LoggerFactory.getLogger(TradeRecordDeserializer.class);
 
     private transient ObjectMapper mapper;
-    private transient long malformed;
+    private transient long loggedCount;
+    private transient Counter malformedJson;
+    private transient Counter missingFields;
 
     @Override
     public void open(DeserializationSchema.InitializationContext ctx) {
         mapper = new ObjectMapper()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        // 여기서는 메트릭을 붙일 수 있다. 이전 주석은 "메트릭으로 남는다" 고 했으면서
+        // 실제로는 지역 변수만 증가시키고 있었다 - 조용히 사라지는 것을 계측한다는
+        // 이 프로젝트 원칙을 스스로 어긴 자리였다.
+        malformedJson = ctx.getMetricGroup().counter("malformedJsonRecords");
+        missingFields = ctx.getMetricGroup().counter("missingFieldRecords");
     }
 
     @Override
@@ -44,14 +61,27 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
         try {
             TradeRecord t = mapper.readValue(record.value(), TradeRecord.class);
             if (t.symbol() == null || t.symbol().isBlank()) {
+                missingFields.inc();
+                return;
+            }
+            // 가격/수량이 비어 있으면 하류 파싱에서 터진다. 계측 가능한 여기서 거른다.
+            if (t.price() == null || t.price().isBlank()
+                    || t.volume() == null || t.volume().isBlank()) {
+                missingFields.inc();
+                warnOnce("가격/수량 누락", record.partition(), record.offset());
                 return;
             }
             out.collect(t);
         } catch (Exception e) {
-            if (++malformed <= 10 || malformed % 1000 == 0) {
-                log.warn("역직렬화 실패 partition={} offset={} (누적 {}건)",
-                        record.partition(), record.offset(), malformed);
-            }
+            malformedJson.inc();
+            warnOnce("역직렬화 실패", record.partition(), record.offset());
+        }
+    }
+
+    /** 로그 폭주를 막는다. 처음 10건과 이후 1000건마다만 남긴다. */
+    private void warnOnce(String what, int partition, long offset) {
+        if (++loggedCount <= 10 || loggedCount % 1000 == 0) {
+            log.warn("{} partition={} offset={} (누적 {}건)", what, partition, offset, loggedCount);
         }
     }
 

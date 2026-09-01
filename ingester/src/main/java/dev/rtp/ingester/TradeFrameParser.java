@@ -80,11 +80,21 @@ public final class TradeFrameParser {
 
         // 가격·수량은 문자열 그대로 넘긴다. double 로 바꾸는 순간
         // 부동소수 오차가 그대로 검증 오차로 둔갑한다.
-        return Optional.of(new ParsedTrade(
-                symbol,
-                eventMs,
-                data.path("price").asText(""),
-                data.path("volume").asText(""),
+        String price = data.path("price").asText("");
+        String volume = data.path("volume").asText("");
+
+        // 빈 값을 그대로 통과시키면 안 된다. 하류의 CandleAggregate 가
+        // Decimals.parse 를 호출하면서 NumberFormatException 을 던지고,
+        // 그건 잡을 죽인 뒤 같은 레코드로 재시작 루프에 빠지는 경로다.
+        // "깨진 레코드 하나가 잡 전체를 죽이면 안 된다" 는 원칙을 역직렬화
+        // 단계에서만 지키고 여기서 놓치고 있었다.
+        if (price.isBlank() || volume.isBlank()) {
+            log.warn("가격/수량이 비어 있는 체결 프레임 버림: symbol={} price='{}' volume='{}'",
+                    symbol, price, volume);
+            return Optional.empty();
+        }
+
+        return Optional.of(new ParsedTrade(symbol, eventMs, price, volume,
                 data.path("currency").asText("")));
     }
 }

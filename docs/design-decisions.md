@@ -138,9 +138,16 @@ savepoint 인계와 GitOps의 "선언 상태 수렴"이 어떻게 충돌하는�
 - `execution.checkpointing.interval: 10s` — 실험 회전을 빠르게. 복구 실험에서 대기 시간이 짧아야 반복이 된다
 - `state.backend: rocksdb` + incremental — 상태가 커지는 실험을 염두
 - `RETAIN_ON_CANCELLATION` — 잡을 죽여도 체크포인트가 남아야 복구 실험이 가능
-- **`KAFKA_TRANSACTION_MAX_TIMEOUT_MS: 900000`** — Flink exactly-once 싱크는 Kafka 트랜잭션을 쓴다.
-  이 값이 체크포인트 주기보다 짧으면 트랜잭션이 타임아웃되며 **조용히 데이터가 유실된다.**
-  기본값(60초)으로 두면 나중에 원인 찾기 어려운 실패가 된다
+- **`KAFKA_TRANSACTION_MAX_TIMEOUT_MS: 900000`** — **현재 이 파이프라인에서는 아무 효과가 없다.**
+  이 설정은 Flink 의 Kafka 트랜잭셔널 싱크(`KafkaSink` + `EXACTLY_ONCE`)를 보호하는 것인데,
+  이 잡은 Kafka 를 **소스로만** 읽고 쓰지 않는다. 유일한 싱크는 HTTP 기반 ClickHouse 다.
+
+  처음에 "Flink exactly-once 싱크는 Kafka 트랜잭션을 쓰므로 이 값을 늘려야 한다" 고 적었으나,
+  그건 Flink-Kafka EOS 튜토리얼의 설명을 **우리 구조에 적용 가능한지 확인하지 않고 옮겨 적은 것**이었다.
+  설정은 무해하므로 남겨 두되(나중에 Kafka 싱크를 붙이면 필요하다) 근거는 바로잡는다.
+
+  > 교훈은 설정값 자체가 아니라 **"왜 필요한지 설명을 붙였는데 그 전제가 우리 아키텍처에
+  > 존재하지 않았다"** 는 것이다. 근거가 그럴듯하면 검증을 건너뛰게 된다.
 
 ## 시계: 이벤트타임은 소스, 처리 시각은 우리 것
 

@@ -6,7 +6,7 @@
 ```
 Exchange WebSocket (실시간 체결)
   → Kafka
-  → Flink  (event-time window · watermark · exactly-once)
+  → Flink  (event-time window · watermark · 체크포인트 복구)
   → ClickHouse
   → 검증: 공식 캔들 API와 대조
 ```
@@ -15,6 +15,12 @@ Exchange WebSocket (실시간 체결)
 
 파이프라인을 "돌아가게" 만드는 것이 아니라, **스트림 처리에서 결과가 틀어지는 지점을 직접 만나고 해결하는 것**이 목적이다.
 실시간 집계는 정상 경로보다 경계 상황(지연 도착, 재처리, 순서 역전, 백프레셔)에서 실력이 갈린다.
+
+> **싱크는 exactly-once 가 아니다.** ClickHouse 는 분산 트랜잭션을 지원하지 않아
+> Flink 의 2PC 를 쓸 수 없고, 이 파이프라인은 end-to-end at-least-once 다.
+> 그걸 감추지 않고 **중복이 보이도록 설계해** 재배포 시 420개 윈도 중복을 실제로 관측했다
+> ([failure-notes](docs/failure-notes.md)). Flink 내부 처리는 체크포인트로 exactly-once 지만
+> 그것과 end-to-end 보장은 다른 이야기다.
 
 집계 결과에 **정답지가 존재한다**는 점이 이 프로젝트의 핵심 설계다.
 거래소가 제공하는 공식 캔들과 대조하면 내 집계가 맞는지 수치로 확인할 수 있고,
