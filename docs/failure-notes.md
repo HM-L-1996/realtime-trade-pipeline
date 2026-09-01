@@ -427,6 +427,60 @@ event=1000 -> seq=0  key=005930|1000|0   <-- 첫 번째와 같은 키
 ---
 
 
+### 리소스는 멀쩡한데 GitOps 가 영원히 빨간불이었다
+
+**일으킨 방법:** 의도한 것이 아니다. ArgoCD 로 차트를 배포한 직후 상태가
+`OutOfSync` 에서 내려오지 않았다.
+
+**증상 1 — Kafka StatefulSet 만 배포 실패:**
+
+```
+failed to create typed patch object (rtp/kafka; apps/v1, Kind=StatefulSet):
+.spec.template.spec.containers[name="kafka"].env[name="KAFKA_PROCESS_ROLES"].controller:
+field not declared in schema
+```
+
+**원인:** YAML flow 매핑의 쉼표다.
+
+```yaml
+- { name: KAFKA_PROCESS_ROLES, value: broker,controller }
+```
+
+flow 매핑 `{ }` 안에서 쉼표는 **항목 구분자**다. 그래서 이 한 줄이
+`name: KAFKA_PROCESS_ROLES`, `value: broker`, `controller: null` **세 개**로 쪼개졌다.
+블록 스타일이던 원본을 Helm 템플릿으로 옮기며 flow 로 바꾼 것이 화근이었다.
+
+`value` 에 쉼표가 있는 나머지 둘(`KAFKA_LISTENERS`,
+`KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`)은 마침 따옴표가 있어 무사했다.
+**따옴표 유무가 우연히 갈랐다.**
+
+> ServerSideApply 가 아니었으면 더 늦게 발견했을 것이다.
+> 서버가 스키마에 없는 필드라고 거절해 준 덕에 원인이 한 줄로 나왔다.
+
+**증상 2 — 고쳐서 푸시했는데도 같은 오류가 반복:**
+ArgoCD 가 이미 올바른 리비전을 보고 있는데도 `Retrying attempt #5` 로
+같은 메시지를 냈다. 실패한 동기화 작업이 재시도 루프에 갇혀 있었다.
+`operation: null` 로 작업을 끊고 `refresh: hard` 를 걸어야 새 매니페스트로 다시 시작했다.
+
+**증상 3 — 전부 Healthy 인데 계속 OutOfSync:**
+StatefulSet 3개가 `OutOfSync / Healthy` 로 남았다. 실제 차이를 떠 보니
+Kubernetes 가 `volumeClaimTemplates` 에 기본값을 채워 넣고 있었다 -
+`volumeMode: Filesystem`, `apiVersion`, `kind`, `status.phase`.
+차트에는 그게 없으니 영구적 차이가 된다.
+
+**대응:** `ignoreDifferences` 로 `/spec/volumeClaimTemplates` 를 제외했다.
+`volumeClaimTemplates` 는 사실상 변경 불가라 drift 를 감지해 봐야 자동 적용이 안 된다.
+**대신 스토리지 크기를 바꿀 때 ArgoCD 가 알려주지 않는다는 것을 알고 있어야 한다.**
+
+**남은 문제 — 이게 진짜 교훈이다:**
+세 증상 모두 "리소스는 멀쩡한데 동기화 상태만 빨간불" 이었다.
+그 상태를 방치하면 **진짜 drift 가 묻힌다.** 늘 OutOfSync 인 대시보드는
+아무도 보지 않게 되고, 그때부터 GitOps 는 이름만 남는다.
+`OutOfSync` 를 "원래 그런 것" 으로 넘기기 시작하는 순간이 위험하다.
+
+---
+
+
 ## (템플릿)
 
 ### [실험명]
