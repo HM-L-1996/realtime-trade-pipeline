@@ -62,7 +62,17 @@ docker exec rtp-jobmanager flink run -d /flink/jobs/aggregator-0.1.0.jar   --top
 | ClickHouse | http://localhost:8123 | 검증 쿼리 |
 | Kafka | localhost:9092 | 수집기 접속 |
 
-검증 쿼리는 뷰로 고정돼 있다.
+검증은 스크립트 하나로 고정돼 있다. 매번 즉석 쿼리를 짜면 결과가 흔들려 비교가 안 된다.
+
+```bash
+./scripts/verify.sh k8s       # kind 클러스터
+./scripts/verify.sh compose   # docker-compose 스택
+```
+
+수집 유실률 → Kafka→Flink 구간 → 공식 캔들 대비 정확도 → 어긋난 윈도 순으로 찍는다.
+**`matched` 가 0 이면 겹치는 구간이 없다는 뜻이므로 정확도를 주장하면 안 된다.**
+
+개별 쿼리는 뷰로도 고정돼 있다.
 
 ```sql
 -- 공식 캔들 대비 차이. missing=1 은 누락, write_count>1 은 중복 기록.

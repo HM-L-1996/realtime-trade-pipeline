@@ -56,12 +56,45 @@ public final class TossTradeStream implements AutoCloseable {
         return connId;
     }
 
+    /** 예외 체인을 한 줄로 요약한다. 토큰 값이 섞이지 않도록 메시지만 쓴다. */
+    private static String describeCause(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null && sb.length() < 300; t = t.getCause()) {
+            if (sb.length() > 0) {
+                sb.append(" <- ");
+            }
+            sb.append(t.getClass().getSimpleName());
+            if (t.getMessage() != null) {
+                sb.append('(').append(t.getMessage()).append(')');
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
     public void connect(HttpClient http, String token) throws Exception {
-        ws = http.newWebSocketBuilder()
-                .header("Authorization", "Bearer " + token)
-                .connectTimeout(Duration.ofSeconds(15))
-                .buildAsync(URI.create(cfg.wsUrl()), new Listener())
-                .get(20, TimeUnit.SECONDS);
+        try {
+            ws = http.newWebSocketBuilder()
+                    .header("Authorization", "Bearer " + token)
+                    .connectTimeout(Duration.ofSeconds(15))
+                    .buildAsync(URI.create(cfg.wsUrl()), new Listener())
+                    .get(20, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            // 핸드셰이크 실패의 원인을 구분할 수 있게 남긴다.
+            //
+            // 401 을 만나면 우리는 토큰을 재발급해 재시도하는데, 원인이
+            // **동시 연결 수 제한**이면 토큰을 다시 받아도 소용이 없고
+            // 지수 백오프만 늘어나며 조용히 계속 실패한다.
+            // 실제로 한 번 당했고, 그때 응답 본문이 없어서 두 원인을 구분하지 못했다.
+            //
+            // JDK WebSocket 은 실패 응답 본문을 노출하지 않는다. 그래서 최소한
+            // 상태 코드와 원인 체인이라도 한 줄로 남긴다.
+            log.error("WebSocket 핸드셰이크 실패 url={} 원인={}",
+                    cfg.wsUrl(), describeCause(e));
+            throw e;
+        }
 
         ws.sendText(subscriptionPayload(), true);
         log.info("구독 선언 전송 connId={} symbols={}", connId, cfg.symbols());
