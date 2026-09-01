@@ -65,3 +65,18 @@ FROM (
 ) AS r
 INNER JOIN rtp.candles_1m_dedup AS c
         ON r.symbol = c.symbol AND r.window_start = c.window_start;
+
+-- 버려진 레코드 요약. 단계·이유별로 언제 얼마나 버려졌는지 본다.
+-- 특정 시각에 몰렸으면 사건이고, 고르게 퍼져 있으면 상시 특성이다. 대응이 다르다.
+CREATE VIEW IF NOT EXISTS rtp.dead_letter_summary AS
+SELECT
+    stage,
+    reason,
+    count()                       AS dropped,
+    uniqExact(symbol)             AS symbols,
+    toString(min(seen_at))        AS first_seen,
+    toString(max(seen_at))        AS last_seen,
+    any(substring(payload, 1, 200)) AS sample
+FROM rtp.dead_letters
+GROUP BY stage, reason
+ORDER BY dropped DESC;

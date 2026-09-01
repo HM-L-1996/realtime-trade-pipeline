@@ -33,10 +33,24 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
     private static final long serialVersionUID = 1L;
     private static final Logger log = LoggerFactory.getLogger(TradeRecordDeserializer.class);
 
+    private final String clickhouseUrl;
+    private final String chUser;
+    private final String chPassword;
+    private final String jobRun;
+
+    public TradeRecordDeserializer(JobConfig cfg) {
+        this.clickhouseUrl = cfg.clickhouseUrl();
+        this.chUser = cfg.clickhouseUser();
+        this.chPassword = cfg.clickhousePassword();
+        this.jobRun = cfg.runId();
+    }
+
     private transient ObjectMapper mapper;
     private transient long loggedCount;
     private transient Counter malformedJson;
     private transient Counter missingFields;
+    private transient Counter deadLetterFailures;
+    private transient DeadLetter deadLetter;
 
     @Override
     public void open(DeserializationSchema.InitializationContext ctx) {
@@ -47,6 +61,19 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
         // 이 프로젝트 원칙을 스스로 어긴 자리였다.
         malformedJson = ctx.getMetricGroup().counter("malformedJsonRecords");
         missingFields = ctx.getMetricGroup().counter("missingFieldRecords");
+        deadLetterFailures = ctx.getMetricGroup().counter("deadLetterFailures");
+        deadLetter = new DeadLetter(clickhouseUrl, chUser, chPassword, jobRun);
+    }
+
+    /**
+     * 버린 레코드의 원본을 남긴다. 실패해도 파이프라인을 멈추지 않는다 -
+     * dead letter 적재 실패로 본 파이프라인이 서면 본말이 전도된다.
+     */
+    private void toDeadLetter(String reason, String symbol, byte[] value) {
+        String payload = value == null ? "" : new String(value, java.nio.charset.StandardCharsets.UTF_8);
+        if (!deadLetter.record("deserialize", reason, symbol, payload)) {
+            deadLetterFailures.inc();
+        }
     }
 
     @Override
@@ -62,18 +89,21 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
             TradeRecord t = mapper.readValue(record.value(), TradeRecord.class);
             if (t.symbol() == null || t.symbol().isBlank()) {
                 missingFields.inc();
+                toDeadLetter("missing-symbol", "", record.value());
                 return;
             }
             // 가격/수량이 비어 있으면 하류 파싱에서 터진다. 계측 가능한 여기서 거른다.
             if (t.price() == null || t.price().isBlank()
                     || t.volume() == null || t.volume().isBlank()) {
                 missingFields.inc();
+                toDeadLetter("missing-field", t.symbol(), record.value());
                 warnOnce("가격/수량 누락", record.partition(), record.offset());
                 return;
             }
             out.collect(t);
         } catch (Exception e) {
             malformedJson.inc();
+            toDeadLetter("malformed-json", "", record.value());
             warnOnce("역직렬화 실패", record.partition(), record.offset());
         }
     }

@@ -68,7 +68,13 @@ q "WITH mine AS (
    ORDER BY m.window_start LIMIT 20 FORMAT PrettyCompact"
 
 echo
-echo "── 5. 범위 ──"
+echo "── 5. 버려진 레코드 (dead letter) ──"
+echo "   세기만 하고 버리면 왜 버려졌는지 사후에 볼 수 없다. 원본을 남긴다."
+q "SELECT stage, reason, dropped, symbols, first_seen, last_seen
+   FROM rtp.dead_letter_summary FORMAT PrettyCompact"
+
+echo
+echo "── 6. 범위 ──"
 q "SELECT 'mine' AS src, count() AS rows, toString(min(window_start)+INTERVAL 9 HOUR) AS first_kst,
           toString(max(window_start)+INTERVAL 9 HOUR) AS last_kst FROM rtp.candles_1m
    UNION ALL
@@ -82,3 +88,4 @@ echo "   - 3번의 vol_ok 가 matched 와 같아야 한다. 근사가 아니라 
 echo "   - duplicated 가 0 이 아니면 같은 윈도가 두 번 쓰였다 (at-least-once 노출)."
 echo "   - 1번 gaps 가 0 이 아니면 4번의 차이를 소스 유실로 설명할 수 있다."
 echo "   - matched 가 0 이면 아직 겹치는 구간이 없다는 뜻이다. 정확도 주장 금지."
+echo "   - 5번이 비어 있으면 버려진 레코드가 없다는 뜻이다. 카운터와 대조할 것."

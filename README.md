@@ -62,6 +62,7 @@ K8s 는 Helm 차트 하나(`charts/rtp`)이고 **ArgoCD 가 저장소를 클러�
 
 ## 문서
 
+- [실패 정책과 운영 기준](docs/failure-policy.md) — 무엇에 멈추고 무엇을 버리는가, SLI/SLO, 알람 등급
 - [설계 판단](docs/design-decisions.md) — 왜 이 구성인지, 무엇을 포기했는지
 - [장애 실험 노트](docs/failure-notes.md) — 의도적으로 깨뜨리고 고친 기록
 - [검증 결과](docs/validation.md) — 공식 캔들 대비 정확도

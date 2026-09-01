@@ -58,7 +58,7 @@ public final class CandleJob {
                 .setTopics(cfg.topic())
                 .setGroupId(cfg.groupId())
                 .setStartingOffsets(startingOffsets(cfg))
-                .setDeserializer(new TradeRecordDeserializer())
+                .setDeserializer(new TradeRecordDeserializer(cfg))
                 .build();
 
         DataStream<TradeRecord> trades = env.fromSource(
@@ -77,7 +77,7 @@ public final class CandleJob {
         // 버려진 늦은 체결을 세어 Prometheus 로 내보낸다. 값 자체는 버린다 -
         // 몇 건이 버려졌는지가 워터마크 설정과 정확도를 잇는 유일한 근거다.
         candles.getSideOutput(LATE_TRADES)
-                .process(new LateTradeCounter())
+                .process(new LateTradeCounter(cfg))
                 .name("late-trades")
                 .uid("late-trades")
                 .sinkTo(new DiscardingSink<>());

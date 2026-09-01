@@ -74,3 +74,25 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(event_time)
 ORDER BY (symbol, event_time, seq_in_ms)
 TTL toDateTime(event_time) + INTERVAL 7 DAY;
+
+-- 버려진 레코드. 세기만 하고 버리면 "무엇이 왜 버려졌는지" 를 사후에 볼 수 없고
+-- 고친 뒤 재처리할 수도 없다.
+--
+-- 카운터만으로는 이런 질문에 답하지 못한다.
+--   특정 종목/시각에 몰렸는가, 소스 형식이 바뀐 것인가 우리 파서가 틀린 것인가
+--
+-- 원본 페이로드를 남겨 그 질문에 답할 수 있게 한다.
+-- TTL 로 잘라내지 않으면 형식이 바뀐 날 무한히 쌓인다.
+CREATE TABLE IF NOT EXISTS rtp.dead_letters
+(
+    seen_at   DateTime64(3, 'UTC') DEFAULT now64(3),
+    stage     LowCardinality(String),   -- deserialize / aggregate / late
+    reason    LowCardinality(String),   -- malformed-json / missing-field / late-window
+    symbol    LowCardinality(String),   -- 알 수 있으면. 아니면 빈 문자열
+    payload   String,                   -- 원본. 이게 있어야 재처리가 가능하다
+    job_run   String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(seen_at)
+ORDER BY (stage, reason, seen_at)
+TTL toDateTime(seen_at) + INTERVAL 14 DAY;

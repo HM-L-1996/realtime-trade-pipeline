@@ -17,16 +17,41 @@ public class LateTradeCounter extends ProcessFunction<TradeRecord, TradeRecord> 
 
     private static final long serialVersionUID = 1L;
 
+    private final String clickhouseUrl;
+    private final String user;
+    private final String password;
+    private final String jobRun;
+
     private transient Counter dropped;
+    private transient Counter recordFailures;
+    private transient DeadLetter deadLetter;
+
+    public LateTradeCounter(JobConfig cfg) {
+        this.clickhouseUrl = cfg.clickhouseUrl();
+        this.user = cfg.clickhouseUser();
+        this.password = cfg.clickhousePassword();
+        this.jobRun = cfg.runId();
+    }
 
     @Override
     public void open(Configuration parameters) {
         dropped = getRuntimeContext().getMetricGroup().counter("lateTradesDropped");
+        recordFailures = getRuntimeContext().getMetricGroup().counter("lateTradeRecordFailures");
+        deadLetter = new DeadLetter(clickhouseUrl, user, password, jobRun);
     }
 
     @Override
     public void processElement(TradeRecord t, Context ctx, Collector<TradeRecord> out) {
         dropped.inc();
+        // 세는 것만으로는 "왜 늦었는지" 를 사후에 볼 수 없다. 원본을 남긴다.
+        // 여기서 실패해도 파이프라인을 멈추지 않는다 - 본말이 전도된다.
+        boolean ok = deadLetter.record("window", "late-window", t.symbol(),
+                "eventMs=" + t.eventMs() + " seq=" + t.seqInMs()
+                        + " price=" + t.price() + " volume=" + t.volume()
+                        + " connId=" + t.connId() + " recvSeq=" + t.recvSeq());
+        if (!ok) {
+            recordFailures.inc();
+        }
         out.collect(t);
     }
 }
