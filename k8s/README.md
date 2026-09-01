@@ -63,6 +63,37 @@ kubectl exec -n rtp -i clickhouse-0 -- clickhouse-client --user rtp --password r
 kubectl delete pvc data-clickhouse-0 -n rtp
 ```
 
+## 잡 배포 (Flink Operator, Application 모드)
+
+```bash
+# 1. jar 빌드 -> 이미지 -> 클러스터 노드에 적재
+./mvnd.sh -pl aggregator -am package -DskipTests
+docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.0 .
+kind load docker-image rtp-aggregator:0.1.0 --name rtp
+
+# 2. RBAC (Operator 헬름 차트는 자기 네임스페이스에만 만든다)
+kubectl apply -f k8s/flink/rbac.yaml
+
+# 3. 잡
+kubectl apply -f k8s/flink/candle-job.yaml
+kubectl get flinkdeployment -n rtp -w
+```
+
+### compose 와 달라진 것
+
+| | compose | K8s |
+|---|---|---|
+| 제출 | `flink run` (명령형) | `FlinkDeployment` CR (선언적) |
+| 체크포인트 | 호스트 볼륨 공유 | **MinIO(S3)** |
+| 재배포 | 사람이 savepoint 뜨고 재개 | `upgradeMode: savepoint` 로 Operator 가 처리 |
+| 재시작 전략 | `FLINK_PROPERTIES` | `flinkConfiguration` |
+
+체크포인트를 S3 에 두는 이유는 JM/TM 이 서로 다른 노드에 뜨기 때문이다.
+kind 기본 StorageClass 는 ReadWriteOnce 라 노드를 넘어 공유되지 않는다.
+
+`imagePullPolicy: Never` 가 필요하다. `kind load` 로 노드에 적재한 로컬 이미지를
+레지스트리에서 다시 받으려 하면 ImagePullBackOff 가 난다.
+
 ## 검증된 구성 (2026-08-31)
 
 | 구성요소 | 버전 |
