@@ -64,8 +64,7 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 15
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { memory: 512Mi }
+{{ toYaml .Values.ingester.resources | indent 12 }}
 {{- end }}
 ---
 {{- if .Values.officialCandles.enabled }}
@@ -114,6 +113,5 @@ spec:
               valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
             - { name: SYMBOLS, value: {{ .Values.ingester.symbols | quote }} }
           resources:
-            requests: { cpu: 50m, memory: 256Mi }
-            limits: { memory: 512Mi }
+{{ toYaml .Values.officialCandles.resources | indent 12 }}
 {{- end }}

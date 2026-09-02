@@ -55,10 +55,16 @@ ingester:
   imagePullPolicy: Never
   topic: trades.raw
   symbols: "005930,000660"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
 
 # 공식 캔들 수집기 = 정답지. 없으면 validation.md 를 쓸 수 없다.
 officialCandles:
   enabled: true
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { memory: 512Mi }
 
 # Prometheus + Grafana. compose 에는 있었는데 K8s 로 옮기며 빠져 있었다 -
 # 지금까지 만든 메트릭이 K8s 에서 전부 안 보이는 상태였다.
