@@ -3,6 +3,22 @@ global:
   scrape_interval: 5s      # 체크포인트 주기가 10초라 그보다 촘촘해야 의미가 있다
   evaluation_interval: 15s
 
+# 규칙 파일을 여기서 읽어야 알람이 평가된다.
+#
+# **이 한 줄이 없어서 alerts.yml 이 통째로 죽어 있었다.** 파일은 ConfigMap 으로
+# 마운트되어 컨테이너 안에 멀쩡히 존재했고, `helm lint` 도 통과했고, 파드도 Running
+# 이었다. 그런데 Prometheus 는 그 파일을 읽지 않았으므로 규칙은 한 번도 평가되지
+# 않았다. 자세한 것은 failure-notes.md 의 "알람을 썼는데 로드되지 않았다".
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# 평가된 알람을 보낼 곳. 이것이 없으면 규칙이 발화해도 Prometheus 웹 UI 안에서만
+# 빨간불이 되고 아무에게도 전달되지 않는다.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager.rtp.svc.cluster.local:9093"]
+
 scrape_configs:
   # Flink JobManager / TaskManager.
   # **정적 타깃으로는 안 된다** - TaskManager Pod 은 잡이 재시작될 때마다 이름이 바뀌고
@@ -50,6 +66,18 @@ scrape_configs:
     static_configs:
       - targets: ["clickhouse.rtp.svc.cluster.local:9363"]
 
+  # Kafka 는 Prometheus 를 네이티브로 지원하지 않는다. exporter 가 필요하다.
+  # 여기서 나오는 kafka_consumergroup_lag 이 "처리가 유입을 못 따라간다" 를
+  # 판정하는 유일한 직접 지표다. compose 에는 있었는데 K8s 로 옮기며 빠졌고,
+  # 그래서 ConsumerLagGrowing 알람이 한동안 캔들 적재량으로 lag 을 흉내내고 있었다.
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter.rtp.svc.cluster.local:9308"]
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager.rtp.svc.cluster.local:9093"]

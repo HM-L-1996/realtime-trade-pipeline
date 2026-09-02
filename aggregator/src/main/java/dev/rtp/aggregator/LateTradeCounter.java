@@ -38,6 +38,9 @@ public class LateTradeCounter extends ProcessFunction<TradeRecord, TradeRecord> 
         dropped = getRuntimeContext().getMetricGroup().counter("lateTradesDropped");
         recordFailures = getRuntimeContext().getMetricGroup().counter("lateTradeRecordFailures");
         deadLetter = new DeadLetter(clickhouseUrl, user, password, jobRun);
+        // 적재는 비동기라 실패가 이 스레드로 돌아오지 않는다. 게이지로 꺼낸다.
+        getRuntimeContext().getMetricGroup()
+                .gauge("lateDeadLetterWriteFailures", () -> deadLetter.failedWrites());
     }
 
     @Override
@@ -45,6 +48,8 @@ public class LateTradeCounter extends ProcessFunction<TradeRecord, TradeRecord> 
         dropped.inc();
         // 세는 것만으로는 "왜 늦었는지" 를 사후에 볼 수 없다. 원본을 남긴다.
         // 여기서 실패해도 파이프라인을 멈추지 않는다 - 본말이 전도된다.
+        // 큐에 넣기만 한다. 늦은 체결이 한꺼번에 쏟아질 때(실측 4,255건)
+        // 여기서 동기 HTTP 를 치면 처리 스레드가 그 수만큼 묶인다.
         boolean ok = deadLetter.record("window", "late-window", t.symbol(),
                 "eventMs=" + t.eventMs() + " seq=" + t.seqInMs()
                         + " price=" + t.price() + " volume=" + t.volume()

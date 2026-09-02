@@ -28,8 +28,8 @@ Exchange WebSocket (실시간 체결)
 **실측 (2026-08-31, compose):** 566개 윈도, 거래량 99.29% 정확 일치(근사 아님, Decimal 비교),
 소스 유실 0%(체결 303,112건 연속). 어긋난 4건은 원인까지 추적했다.
 
-**실측 (2026-09-02, K8s):** 20개 윈도 OHLCV **전 항목 100% 일치**, 중복 0.
-표본은 작지만 Helm + ArgoCD + Flink Operator 로 옮긴 뒤에도 같은 정확도가 나온다는 확인이다.
+**실측 (2026-09-02, K8s):** 68개 윈도 OHLCV **전 항목 100% 일치**, 중복 0.
+Helm + ArgoCD + Flink Operator 로 옮긴 뒤에도 같은 정확도가 나온다는 확인이다.
 자세한 것은 [validation.md](docs/validation.md).
 
 ## 대표적으로 다룬 문제

@@ -63,11 +63,19 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
         missingFields = ctx.getMetricGroup().counter("missingFieldRecords");
         deadLetterFailures = ctx.getMetricGroup().counter("deadLetterFailures");
         deadLetter = new DeadLetter(clickhouseUrl, chUser, chPassword, jobRun);
+        // 적재가 비동기라 실패는 이 스레드에서 알 수 없다. 게이지로 꺼내 본다 -
+        // 그러지 않으면 "버렸다고 기록하는 것" 자체가 조용히 실패한다.
+        ctx.getMetricGroup().gauge("deadLetterWriteFailures", () -> deadLetter.failedWrites());
+        ctx.getMetricGroup().gauge("deadLetterQueueDropped", () -> deadLetter.droppedByBackpressure());
+        ctx.getMetricGroup().gauge("deadLetterWritten", () -> deadLetter.writtenRows());
     }
 
     /**
      * 버린 레코드의 원본을 남긴다. 실패해도 파이프라인을 멈추지 않는다 -
      * dead letter 적재 실패로 본 파이프라인이 서면 본말이 전도된다.
+     *
+     * <p>{@code record()} 는 큐에 넣기만 하고 블로킹하지 않는다. 여기서 세는 것은
+     * <b>큐가 가득 차 기록조차 못 한 건수</b>이고, 적재 실패는 게이지로 따로 본다.
      */
     private void toDeadLetter(String reason, String symbol, byte[] value) {
         String payload = value == null ? "" : new String(value, java.nio.charset.StandardCharsets.UTF_8);

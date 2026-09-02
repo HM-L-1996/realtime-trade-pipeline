@@ -12,7 +12,24 @@ case "$TARGET" in
   *) echo "사용법: $0 [k8s|compose]"; exit 1 ;;
 esac
 
-q() { CH --query "$1" 2>/dev/null; }
+# 쿼리 오류를 삼키지 않는다.
+#
+# 처음에는 stderr 를 /dev/null 로 버렸다. **그러면 쿼리가 깨진 것과 결과가 없는 것이
+# 화면에서 똑같아 보인다.** 실제로 1-b 를 고치다 GROUP BY 를 빠뜨렸는데 아무 표시 없이
+# 빈칸만 나왔다. 검증 스크립트가 조용히 실패하면 검증 자체를 믿을 수 없다.
+q() {
+  local out rc
+  out=$(CH --query "$1" 2>&1); rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "   !! 쿼리 실패 (exit $rc) — 이 항목의 결과는 없는 것이 아니라 **측정되지 않았다**"
+    echo "$out" | sed -n '1,3p' | sed 's/^/      /'
+    FAILED_QUERIES=$((FAILED_QUERIES + 1))
+    return 0
+  fi
+  [ -n "$out" ] && echo "$out"
+  return 0
+}
+FAILED_QUERIES=0
 
 echo "════════ 검증 대상: $TARGET ════════"
 echo
@@ -25,9 +42,23 @@ q "SELECT conn_id, received, gaps, loss_pct, first_seen, last_seen
 echo
 echo "── 1-b. 출처 점검 (합성/리플레이가 섞였는가) ──"
 echo "   실험 데이터가 운영 토픽에 섞이면 수치가 나오는데 그 수치가 틀린다. 실제로 당했다."
-q "SELECT multiIf(conn_id LIKE 'synth%%', '합성(오염)', conn_id LIKE 'replay%%', '리플레이(오염)', '실수집') AS src,
-          count() AS trades, uniqExact(conn_id) AS conns
-   FROM rtp.trades_raw GROUP BY src ORDER BY trades DESC FORMAT PrettyCompact"
+echo "   이름 규칙만 믿지 않는다. 접두어를 빼먹은 실험 스크립트는 못 잡기 때문이다."
+echo "   **연결을 전부 나열하고 가격대를 같이 본다** - 출처가 다르면 값의 범위가 다르다."
+q "SELECT conn_id,
+          multiIf(conn_id LIKE 'synth%%', '합성(오염)',
+                  conn_id LIKE 'replay%%', '리플레이(오염)', '실수집?') AS label,
+          count() AS trades,
+          uniqExact(symbol) AS syms,
+          toString(round(min(toFloat64(price)))) AS price_min,
+          toString(round(max(toFloat64(price)))) AS price_max,
+          toString(min(ingest_time)) AS first_seen
+   FROM rtp.trades_raw GROUP BY conn_id, label ORDER BY trades DESC FORMAT PrettyCompact"
+
+echo
+echo "   판정: 연결이 2개 이상이면 그 자체로 의심한다. 수집기는 한 번에 하나만 붙는다."
+echo "         가격대가 다른 연결이 섞여 있으면 이름이 무엇이든 **오염이다.**"
+echo "         실제로 당했을 때 실수집은 1,618,000~1,641,000, 합성은 66,563~84,356 이었다."
+echo "   - 오염 행이 있으면 3번 수치는 **무효다.** 수치가 나온다고 유효한 게 아니다."
 
 echo
 echo "── 2. Kafka→Flink 구간 ──"
@@ -97,3 +128,9 @@ echo "   - 1번 gaps 가 0 이 아니면 4번의 차이를 소스 유실로 설�
 echo "   - matched 가 0 이면 아직 겹치는 구간이 없다는 뜻이다. 정확도 주장 금지."
 echo "   - 5번이 비어 있으면 버려진 레코드가 없다는 뜻이다. 카운터와 대조할 것."
 echo "   - 1-b 에 오염 행이 있으면 3번 수치는 **무효다.** 수치가 나온다고 유효한 게 아니다."
+
+echo
+if [ "$FAILED_QUERIES" -ne 0 ]; then
+  echo "‼ 쿼리 ${FAILED_QUERIES}개가 실패했다. 위 결과는 불완전하다."
+  exit 1
+fi

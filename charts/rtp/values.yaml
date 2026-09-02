@@ -16,6 +16,11 @@ kafka:
     requests: { cpu: 200m, memory: 1Gi }
     limits: { memory: 2Gi }
 
+# 로컬 kind 클러스터 전용 자격증명이다. 공개 저장소이므로 여기 적힌 값이
+# 곧 공개된다는 뜻이고, 실제 환경이라면 이 자리에 값을 두면 안 된다.
+# 이 프로젝트에서는 External Secrets / SOPS 를 붙이지 않았다 -
+# 채우려는 공백과 축이 다르고 범위만 넓어진다. 대신 컨테이너로 값이 들어가는
+# 경로는 전부 Secret 을 거치게 해서, 값을 바꿀 때 고칠 곳이 한 군데가 되게 했다.
 clickhouse:
   image: clickhouse/clickhouse-server:24.8
   storage: 10Gi
@@ -62,6 +67,8 @@ observability:
   enabled: true
   prometheusImage: prom/prometheus:v3.1.0
   grafanaImage: grafana/grafana:11.4.0
+  alertmanagerImage: prom/alertmanager:v0.28.0
+  kafkaExporterImage: danielqsj/kafka-exporter:v1.8.0
 
 flink:
   enabled: true

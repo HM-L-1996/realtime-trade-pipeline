@@ -109,6 +109,16 @@ kind: ConfigMap
 metadata:
   name: grafana-provisioning
 data:
+  # 대시보드를 어디서 읽을지 알려 준다. 이것이 없으면 대시보드 JSON 을
+  # 마운트해도 Grafana 가 읽지 않아 빈 화면만 보인다.
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: rtp
+        type: file
+        folder: RTP
+        options:
+          path: /var/lib/grafana/dashboards
   datasources.yaml: |
     apiVersion: 1
     datasources:
@@ -143,11 +153,149 @@ spec:
           ports:
             - { containerPort: 3000, name: http }
           volumeMounts:
-            - { name: provisioning, mountPath: /etc/grafana/provisioning/datasources }
+            {{/*
+              datasources 와 dashboards 는 provisioning 아래 **다른 디렉터리**여야 한다.
+              한 ConfigMap 을 두 경로에 subPath 로 나눠 넣는다.
+            */}}
+            - { name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml }
+            - { name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml }
+            - { name: dashboards,   mountPath: /var/lib/grafana/dashboards }
           resources:
             requests: { cpu: 50m, memory: 256Mi }
             limits: { memory: 512Mi }
       volumes:
         - name: provisioning
           configMap: { name: grafana-provisioning }
+        - name: dashboards
+          configMap: { name: grafana-dashboards }
+---
+{{/*
+  대시보드 JSON. compose 에는 처음부터 있었는데 K8s 로 옮기며 빠져 있었다 -
+  NodePort 로 접속하면 Grafana 는 뜨는데 볼 것이 하나도 없었다.
+  차트가 원본을 소유하고 compose 가 같은 파일을 마운트한다.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+data:
+{{ (.Files.Glob "files/grafana/*.json").AsConfig | indent 2 }}
+---
+{{/*
+  Kafka 는 Prometheus 를 네이티브로 지원하지 않는다. 컨슈머 그룹 lag 은
+  exporter 없이는 볼 수 없고, lag 은 "처리가 유입을 못 따라간다" 를 판정하는
+  유일한 직접 지표다.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+spec:
+  selector: { app: kafka-exporter }
+  ports:
+    - { name: http, port: 9308, targetPort: 9308 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: kafka-exporter }
+  template:
+    metadata:
+      labels: { app: kafka-exporter }
+    spec:
+      containers:
+        - name: kafka-exporter
+          image: {{ .Values.observability.kafkaExporterImage }}
+          args:
+            - --kafka.server=kafka.{{ .Release.Namespace }}.svc.cluster.local:19092
+            - --web.listen-address=:9308
+          ports:
+            - { containerPort: 9308, name: http }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }
+---
+{{/*
+  Alertmanager.
+
+  이것이 없으면 규칙이 발화해도 Prometheus UI 안에서만 빨간불이 되고
+  아무에게도 전달되지 않는다. failure-policy.md 는 severity=page 를
+  "깨운다" 로 정의했는데, 깨워 줄 수신처가 없으면 그 정의가 거짓이 된다.
+
+  **실제 통보 채널(Slack 등)은 붙이지 않았다.** 공개 저장소라 웹훅 URL 을
+  커밋할 수 없다. 대신 라우팅까지는 진짜로 동작하게 두고, 최종 수신처만
+  로그로 떨어지는 webhook 으로 둔다 - 발화·묶임·억제까지는 관측할 수 있다.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+data:
+  alertmanager.yml: |
+    route:
+      receiver: default
+      group_by: [alertname, severity]
+      group_wait: 30s
+      group_interval: 5m
+      # page 는 반복해서 다시 알린다. warning 은 조용히 둔다.
+      repeat_interval: 4h
+      routes:
+        - matchers: [severity="page"]
+          receiver: default
+          repeat_interval: 1h
+    # 소스가 끊기면 캔들도 안 나온다. 원인 알람이 이미 떠 있으면
+    # 결과 알람은 억제한다 - 한 사건에 알람 두 개가 오면 신뢰를 잃는다.
+    inhibit_rules:
+      - source_matchers: [alertname="IngesterDisconnected"]
+        target_matchers: [alertname="NoCandlesProduced"]
+        equal: [namespace]
+    receivers:
+      - name: default
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+spec:
+  selector: { app: alertmanager }
+  ports:
+    - { name: http, port: 9093, targetPort: 9093 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: alertmanager }
+  template:
+    metadata:
+      labels: { app: alertmanager }
+      annotations:
+        checksum/config: {{ (.Files.Glob "files/prometheus/*.yml").AsConfig | sha256sum }}
+    spec:
+      containers:
+        - name: alertmanager
+          image: {{ .Values.observability.alertmanagerImage }}
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - { containerPort: 9093, name: http }
+          volumeMounts:
+            - { name: config, mountPath: /etc/alertmanager }
+            - { name: data, mountPath: /alertmanager }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+      volumes:
+        - name: config
+          configMap: { name: alertmanager-config }
+        - name: data
+          emptyDir: {}
 {{- end }}

@@ -53,7 +53,7 @@ services:
       GF_USERS_DEFAULT_THEME: light
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - ../charts/rtp/files/grafana:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
 
 volumes:
