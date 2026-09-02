@@ -1055,7 +1055,52 @@ operationState.operation.sync.revision  5346d64   ← 이전 커밋
 kubectl -n argocd patch app rtp --type merge   -p '{"operation":{"sync":{"revision":"<HEAD>","prune":true, ...}}}'
 ```
 
+#### 이어서 진짜 원인이 나왔다
+
+명시적 sync 를 다시 걸자 이번에는 조용히 넘어가지 않고 오류가 떴다.
+
+```
+ComparisonError: failed to calculate diff: error calculating structured merge diff:
+error building typed value from live resource:
+.status.terminatingReplicas: field not declared in schema
+```
+
+**버전 격차였다.** 클러스터는 v1.37 인데 ArgoCD 는 v2.13.2 다.
+그 사이에 Deployment 에 `status.terminatingReplicas` 가 추가됐고,
+ArgoCD 가 자기 안에 들고 있는 OpenAPI 스키마에는 그 필드가 없다.
+서버사이드 적용은 diff 를 structured merge 로 계산하는데 그 단계에서 실패한다.
+클러스터의 모든 Deployment 가 이 필드를 갖고 있으니 전부 걸린다.
+
+```
+kafka-exporter   status.terminatingReplicas = 0
+prometheus       status.terminatingReplicas = 0
+grafana          status.terminatingReplicas = 0
+alertmanager     status.terminatingReplicas = 0
+ingester         status.terminatingReplicas = 0
+```
+
+`ServerSideDiff=true` 로도 해결되지 않았다 — 같은 코드 경로다.
+`ServerSideApply` 를 끄고 클라이언트 사이드 diff 로 되돌리자 비교가 정상 동작했고,
+**그동안 가려져 있던 실제 차이 4건이 그제야 드러났다.**
+
+```
+OutOfSync: ConfigMap/prometheus-config    ← 알람 규칙 수정분
+           Deployment/alertmanager
+           Deployment/prometheus
+           FlinkDeployment/candle-1m      ← 이미지 0.1.1
+```
+
+근본 해결은 ArgoCD 를 올리는 것이다. 여기서는 하지 않았다 —
+파이프라인 검증이 우선이고 우회로 목적을 달성할 수 있다.
+`ServerSideApply` 를 넣었던 이유(StatefulSet 의 `volumeClaimTemplates`)는
+`ignoreDifferences` 로 이미 처리돼 있어 지금은 없어도 된다.
+다만 **끈 이유를 설정 파일에 적어 두었다** — 이유를 모르면 누군가 다시 켠다.
+
 #### 남는 것
+
+**비교가 실패했는데 상태는 초록불이었다.** 이것이 이 항목의 핵심이다.
+diff 를 계산하지 못하면 "차이를 모른다" 가 맞는 답인데, 화면에는 `Synced` 로
+나왔다. 모른다는 것과 같다는 것이 같은 색으로 표시된 셈이다.
 
 이 저장소에는 이미 "리소스는 멀쩡한데 GitOps 가 영원히 빨간불이었다" 는 항목이 있다.
 이번은 **정확히 반대**다 — 초록불인데 적용되지 않았다.
