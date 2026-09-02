@@ -1,0 +1,55 @@
+# 장애 실험용 계측. 여기서 뽑는 값이 failure-notes.md 의 근거가 된다.
+global:
+  scrape_interval: 5s      # 체크포인트 주기가 10초라 그보다 촘촘해야 의미가 있다
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Flink JobManager / TaskManager.
+  # **정적 타깃으로는 안 된다** - TaskManager Pod 은 잡이 재시작될 때마다 이름이 바뀌고
+  # (candle-1m-taskmanager-1-1 -> -1-2), Operator 가 필요에 따라 늘리고 줄인다.
+  # 실제로 Pod 강제 종료 실험에서 이름이 바뀌었다.
+  - job_name: flink
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [rtp]
+    relabel_configs:
+      # Flink Operator 가 붙이는 라벨로 고른다.
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: candle-1m|exp-.*
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9249
+      - source_labels: [__meta_kubernetes_pod_label_component]
+        target_label: component      # jobmanager / taskmanager
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: flink_job
+
+  # 수집기. 소스 유실과 파이프라인 버그를 구분하는 지표가 여기서 나온다.
+  - job_name: ingester
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [rtp]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: ingester
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip]
+        target_label: __address__
+        replacement: $1:9200
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # ClickHouse 내장 엔드포인트. 파트 수·머지 지연·삽입 실패.
+  # 파트가 치솟으면 "too many parts" 로 적재가 막힌다.
+  - job_name: clickhouse
+    static_configs:
+      - targets: ["clickhouse.rtp.svc.cluster.local:9363"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

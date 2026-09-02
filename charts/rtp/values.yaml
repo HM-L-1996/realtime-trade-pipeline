@@ -55,6 +55,14 @@ ingester:
 officialCandles:
   enabled: true
 
+# Prometheus + Grafana. compose 에는 있었는데 K8s 로 옮기며 빠져 있었다 -
+# 지금까지 만든 메트릭이 K8s 에서 전부 안 보이는 상태였다.
+# Grafana 는 NodePort 30300 -> 호스트 13000 (kind-cluster.yaml 참고)
+observability:
+  enabled: true
+  prometheusImage: prom/prometheus:v3.1.0
+  grafanaImage: grafana/grafana:11.4.0
+
 flink:
   enabled: true
   image: rtp-aggregator:0.1.0

@@ -1,0 +1,153 @@
+{{- if .Values.observability.enabled }}
+{{/*
+  Prometheus + Grafana.
+  compose 에는 있었는데 K8s 로 옮기며 빠져 있었다 - 지금까지 만든 메트릭
+  (소스 유실, 늦은 체결 드롭, 체크포인트 소요, 파트 수)이 K8s 에서 전부 안 보였다.
+
+  Flink TaskManager 는 정적 타깃으로 잡을 수 없다. Pod 이름이 재시작마다 바뀌고
+  (실측: -1-1 -> -1-2) Operator 가 필요에 따라 늘리고 줄인다. 서비스 디스커버리를 쓴다.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus
+rules:
+  # Pod 디스커버리에만 쓴다. 최소 권한.
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+{{ (.Files.Glob "files/prometheus/*.yml").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector: { app: prometheus }
+  ports:
+    - { name: http, port: 9090, targetPort: 9090 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: prometheus }
+  template:
+    metadata:
+      labels: { app: prometheus }
+      annotations:
+        checksum/config: {{ (.Files.Glob "files/prometheus/*.yml").AsConfig | sha256sum }}
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: {{ .Values.observability.prometheusImage }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            {{/* 실험 전후를 비교하려면 과거 구간이 남아 있어야 한다. */}}
+            - --storage.tsdb.retention.time=15d
+            - --web.enable-lifecycle
+          ports:
+            - { containerPort: 9090, name: http }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+            - { name: data, mountPath: /prometheus }
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+        {{/*
+          emptyDir 다. Pod 이 죽으면 지표 이력이 사라진다.
+          실험 중에만 쓰는 용도라 감수한다 - PVC 를 붙이면 노드 고정 문제가 생기고
+          이 프로젝트가 채우려는 공백과 무관한 작업이 늘어난다.
+        */}}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+spec:
+  type: NodePort
+  selector: { app: grafana }
+  ports:
+    - { name: http, port: 3000, targetPort: 3000, nodePort: 30300 }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: rtp-prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.{{ .Release.Namespace }}.svc.cluster.local:9090
+        isDefault: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: grafana }
+  template:
+    metadata:
+      labels: { app: grafana }
+    spec:
+      containers:
+        - name: grafana
+          image: {{ .Values.observability.grafanaImage }}
+          env:
+            {{/* 로컬 전용. working-notes.md 의 "K8s 이전 시 반드시 바꿀 것" 참고. */}}
+            - { name: GF_SECURITY_ADMIN_USER, value: admin }
+            - { name: GF_SECURITY_ADMIN_PASSWORD, value: admin }
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Admin }
+          ports:
+            - { containerPort: 3000, name: http }
+          volumeMounts:
+            - { name: provisioning, mountPath: /etc/grafana/provisioning/datasources }
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: provisioning
+          configMap: { name: grafana-provisioning }
+{{- end }}

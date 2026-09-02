@@ -1,0 +1,55 @@
+# 알람 규칙. docs/failure-policy.md 의 등급 구분을 그대로 옮긴 것이다.
+# 깨우는 것과 대시보드에 둘 것을 severity 로 가른다.
+groups:
+  - name: rtp
+    rules:
+      # 신선도. "잡이 살아있는 것" 과 "결과가 나오는 것" 은 다르다.
+      # 유휴 파티션 실험에서 모든 지표가 초록불인데 출력이 0이었다.
+      - alert: NoCandlesProduced
+        expr: |
+          increase(flink_taskmanager_job_task_operator_clickhouseCandleRows[10m]) == 0
+          and on() rtp_ingester_connected == 1
+          and on() increase(rtp_ingester_trades_total[10m]) > 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "체결은 들어오는데 캔들이 10분째 안 나온다"
+          description: "유휴 파티션으로 워터마크가 멈췄을 수 있다. idleness 설정을 확인할 것."
+
+      # 소스 단절. 그 구간의 체결은 되메울 수 없다.
+      - alert: IngesterDisconnected
+        expr: rtp_ingester_connected == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "수집기 WebSocket 이 2분째 끊겨 있다"
+          description: "소스에 시퀀스가 없어 이 구간은 되메울 수 없다."
+
+      # 체크포인트 실패. 방치하면 재처리 구간이 계속 늘어난다.
+      - alert: CheckpointsFailing
+        expr: increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m]) > 3
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "체크포인트가 10분간 3회 이상 실패"
+          description: "싱크가 막혔을 가능성. 복구 시 재처리 구간이 그만큼 길어진다."
+
+      # 아래는 깨우지 않는다. 추세만 본다.
+      - alert: LateTradesDropping
+        expr: increase(flink_taskmanager_job_task_operator_lateTradesDropped[15m]) > 100
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "늦게 도착해 버려지는 체결이 늘고 있다"
+          description: "워터마크 지연을 늘리면 줄지만 결과가 늦어진다. 즉시 조치할 것은 없다."
+
+      # lag 은 반드시 그룹별로 본다. 죽은 그룹이 무한히 쌓아 전체 합계는 무의미하다.
+      - alert: ConsumerLagGrowing
+        expr: |
+          rtp_ingester_trades_total > 0
+          and on() increase(flink_taskmanager_job_task_operator_clickhouseCandleRows[15m]) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "처리가 유입을 못 따라가는 것으로 보인다"
+          description: "백프레셔가 0이어도 소스가 병목이면 lag 이 쌓인다. busyRatio 를 볼 것."
