@@ -4,6 +4,8 @@ import dev.rtp.model.Candle;
 import dev.rtp.model.TradeRecord;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.KafkaSourceBuilder;
+import org.apache.flink.connector.kafka.source.KafkaSourceOptions;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -53,13 +55,36 @@ public final class CandleJob {
         // 컨테이너가 돌아오는 데 그보다 오래 걸렸기 때문이다.
         // K8s 에서 Pod 이 재스케줄되면 그대로 재현된다.
 
-        KafkaSource<TradeRecord> source = KafkaSource.<TradeRecord>builder()
+        // 파티션 재발견을 **명시적으로 켠다.**
+        //
+        // Flink 의 기본값은 꺼짐이고, 꺼져 있으면 잡이 시작할 때 조회한 파티션만
+        // 평생 읽는다. 토픽 파티션을 늘려도 새 파티션을 영원히 보지 않는다.
+        //
+        // 이게 위험한 이유는 **아무 신호도 나오지 않기 때문**이다. 실측에서
+        // 3->7 로 늘렸더니 이렇게 됐다.
+        //
+        //   잡 상태        RUNNING / STABLE
+        //   컨슈머 lag     0        (아는 파티션은 다 읽었으므로)
+        //   새 파티션      1만 531건이 읽히지 않고 쌓임
+        //   캔들 출력      완전히 멈춤
+        //
+        // 커밋된 오프셋이 없는 파티션을 kafka-exporter 는 lag=-1 로 낸다.
+        // 그래서 lag 합계는 오히려 **음수**가 되고, lag 기반 알람은 전부 침묵한다.
+        // 이 사고를 잡아 주는 것은 lag 이 아니라 "출력이 멈췄는가"(신선도)다.
+        KafkaSourceBuilder<TradeRecord> sourceBuilder = KafkaSource.<TradeRecord>builder()
                 .setBootstrapServers(cfg.bootstrapServers())
                 .setTopics(cfg.topic())
                 .setGroupId(cfg.groupId())
                 .setStartingOffsets(startingOffsets(cfg))
-                .setDeserializer(new TradeRecordDeserializer(cfg))
-                .build();
+                .setDeserializer(new TradeRecordDeserializer(cfg));
+
+        long discoveryMs = cfg.partitionDiscovery().toMillis();
+        if (discoveryMs > 0) {
+            sourceBuilder.setProperty(
+                    KafkaSourceOptions.PARTITION_DISCOVERY_INTERVAL_MS.key(),
+                    String.valueOf(discoveryMs));
+        }
+        KafkaSource<TradeRecord> source = sourceBuilder.build();
 
         DataStream<TradeRecord> trades = env.fromSource(
                 source, watermarks(cfg), "kafka-trades");

@@ -18,7 +18,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: synth
-          image: rtp-ingester:0.1.0
+          image: rtp-ingester:0.1.2
           imagePullPolicy: Never
           command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
           args: ["--rate", "30", "--duration", "3600", "--symbols", "005930,000660", "--seed", "101"]
@@ -26,7 +26,7 @@ spec:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: kafka.rtp.svc.cluster.local:9092
             - name: KAFKA_TRADES_TOPIC
-              value: trades.raw
+              value: trades.exp.synth
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 512Mi }

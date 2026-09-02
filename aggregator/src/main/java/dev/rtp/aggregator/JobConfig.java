@@ -28,6 +28,7 @@ public record JobConfig(
         boolean archiveTrades,
         String startOffsets,
         String candlesTable,
+        Duration partitionDiscovery,
         String runId) {
 
     public static JobConfig from(String[] args) {
@@ -67,6 +68,20 @@ public record JobConfig(
                 // 설정 비교 실험은 별도 테이블에 쓴다. 같은 테이블에 쓰면 서로 다른
                 // 조건의 결과가 섞이고, write_count 가 중복 신호로 오해된다.
                 p.get("candles-table", "rtp.candles_1m"),
+
+                // 파티션 재발견 주기.
+                //
+                // **Flink 의 기본값은 꺼짐이다.** 잡이 시작할 때 한 번만 파티션을
+                // 조회하고 그 뒤로는 다시 보지 않는다. 로그에 이렇게 찍힌다.
+                //
+                //   Starting the KafkaSourceEnumerator ... without periodic partition discovery.
+                //
+                // 그 상태에서 토픽 파티션을 늘리면 새 파티션은 영원히 읽히지 않는다.
+                // 실측했다 - 3->7 로 늘렸더니 새 파티션 두 개에 1만 건이 쌓이는 동안
+                // 잡은 RUNNING 이었고 컨슈머 lag 은 0이었다.
+                // 0 이하로 주면 끄는 것이고, 그때의 거동을 보려면 실험에서 0을 준다.
+                Duration.ofSeconds(p.getLong("partition-discovery-seconds", 30)),
+
                 p.get("run-id", "run-" + System.currentTimeMillis()));
     }
 
@@ -78,9 +93,10 @@ public record JobConfig(
     /** 실행 조건을 로그와 runId 에 남긴다. 나중에 결과를 설정과 대조하기 위한 것. */
     public String describe() {
         return ("window=%ds watermarkDelay=%ds idleness=%ds allowedLateness=%ds "
-                + "topic=%s offsets=%s table=%s runId=%s").formatted(
+                + "topic=%s offsets=%s table=%s partitionDiscovery=%ds runId=%s").formatted(
                 windowSize.toSeconds(), watermarkDelay.toSeconds(),
                 idleness.toSeconds(), allowedLateness.toSeconds(),
-                topic, startOffsets, candlesTable, runId);
+                topic, startOffsets, candlesTable,
+                partitionDiscovery.toSeconds(), runId);
     }
 }
