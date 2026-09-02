@@ -23,6 +23,13 @@ q "SELECT conn_id, received, gaps, loss_pct, first_seen, last_seen
    ORDER BY received DESC FORMAT PrettyCompact"
 
 echo
+echo "── 1-b. 출처 점검 (합성/리플레이가 섞였는가) ──"
+echo "   실험 데이터가 운영 토픽에 섞이면 수치가 나오는데 그 수치가 틀린다. 실제로 당했다."
+q "SELECT multiIf(conn_id LIKE 'synth%%', '합성(오염)', conn_id LIKE 'replay%%', '리플레이(오염)', '실수집') AS src,
+          count() AS trades, uniqExact(conn_id) AS conns
+   FROM rtp.trades_raw GROUP BY src ORDER BY trades DESC FORMAT PrettyCompact"
+
+echo
 echo "── 2. Kafka→Flink 구간 ──"
 echo "   원본 체결 수와 캔들의 trade_count 가 다르면 이 구간에서 빠진 것이다."
 q "SELECT count() AS windows, countIf(diff=0) AS exact, countIf(diff!=0) AS mismatched
@@ -89,3 +96,4 @@ echo "   - duplicated 가 0 이 아니면 같은 윈도가 두 번 쓰였다 (at
 echo "   - 1번 gaps 가 0 이 아니면 4번의 차이를 소스 유실로 설명할 수 있다."
 echo "   - matched 가 0 이면 아직 겹치는 구간이 없다는 뜻이다. 정확도 주장 금지."
 echo "   - 5번이 비어 있으면 버려진 레코드가 없다는 뜻이다. 카운터와 대조할 것."
+echo "   - 1-b 에 오염 행이 있으면 3번 수치는 **무효다.** 수치가 나온다고 유효한 게 아니다."
