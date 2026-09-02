@@ -211,7 +211,12 @@ spec:
         - name: kafka-exporter
           image: {{ .Values.observability.kafkaExporterImage }}
           args:
-            - --kafka.server=kafka.{{ .Release.Namespace }}.svc.cluster.local:19092
+            {{/*
+              compose 는 19092, K8s Service 는 9092 다. compose 값을 그대로 옮겼다가
+              exporter 가 연결을 기다리느라 HTTP 리스너를 아예 열지 못했다.
+              파드는 Running 이고 로그에는 "Starting kafka_exporter" 한 줄뿐이었다.
+            */}}
+            - --kafka.server=kafka.{{ .Release.Namespace }}.svc.cluster.local:9092
             - --web.listen-address=:9308
           ports:
             - { containerPort: 9308, name: http }

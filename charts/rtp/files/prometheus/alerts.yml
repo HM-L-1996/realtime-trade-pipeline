@@ -5,11 +5,18 @@ groups:
     rules:
       # 신선도. "잡이 살아있는 것" 과 "결과가 나오는 것" 은 다르다.
       # 유휴 파티션 실험에서 모든 지표가 초록불인데 출력이 0이었다.
+      #
+      # **집계한 뒤에 비교해야 한다.** 이 지표는 subtask 마다 시리즈가 따로 있고,
+      # 병렬도 3 이면 6개가 나온다. 어떤 subtask 는 그 10분 동안 할당된 종목이
+      # 없어 정상적으로 0 이다. 집계 없이 `== 0` 을 걸면 그 시리즈들이 매칭되고,
+      # `and on()` 이 빈 키로 교차시켜 **파이프라인이 멀쩡한데도 발화한다.**
+      # 실제로 규칙을 켜자마자 첫 평가에서 pending 이 됐다 (합계는 2.19 였다).
+      # 거짓 양성으로 사람을 깨우는 알람은 없는 알람보다 나쁘다.
       - alert: NoCandlesProduced
         expr: |
-          increase(flink_taskmanager_job_task_operator_clickhouseCandleRows[10m]) == 0
-          and on() rtp_ingester_connected == 1
-          and on() increase(rtp_ingester_trades_total[10m]) > 0
+          sum(increase(flink_taskmanager_job_task_operator_clickhouseCandleRows[10m])) == 0
+          and on() max(rtp_ingester_connected) == 1
+          and on() sum(increase(rtp_ingester_trades_total[10m])) > 0
         for: 5m
         labels: { severity: page }
         annotations:
@@ -18,7 +25,7 @@ groups:
 
       # 소스 단절. 그 구간의 체결은 되메울 수 없다.
       - alert: IngesterDisconnected
-        expr: rtp_ingester_connected == 0
+        expr: max(rtp_ingester_connected) == 0
         for: 2m
         labels: { severity: page }
         annotations:
@@ -27,7 +34,8 @@ groups:
 
       # 체크포인트 실패. 방치하면 재처리 구간이 계속 늘어난다.
       - alert: CheckpointsFailing
-        expr: increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m]) > 3
+        # 잡이 여러 개면 합계는 의미가 없다. 가장 나쁜 잡을 본다.
+        expr: max(increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m])) > 3
         for: 5m
         labels: { severity: page }
         annotations:
@@ -36,7 +44,8 @@ groups:
 
       # 아래는 깨우지 않는다. 추세만 본다.
       - alert: LateTradesDropping
-        expr: increase(flink_taskmanager_job_task_operator_lateTradesDropped[15m]) > 100
+        # 여기서는 합계가 맞다. 버려진 총건수가 곧 관심사다.
+        expr: sum(increase(flink_taskmanager_job_task_operator_lateTradesDropped[15m])) > 100
         for: 10m
         labels: { severity: warning }
         annotations:

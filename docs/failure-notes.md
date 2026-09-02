@@ -844,6 +844,54 @@ Alertmanager 가 클러스터에도 compose 에도 없었고 `alerting:` 블록�
 | `AlertmanagerUnreachable` | `prometheus_notifications_alertmanagers_discovered < 1` — 발화해도 전달될 곳이 없음 |
 | `ScrapeTargetDown` | `up == 0` — 빈 그래프를 정상으로 읽는 것을 막는다 |
 
+#### 고치고 나니 알람이 거짓으로 발화했다
+
+`rule_files` 를 넣고 규칙이 평가되기 시작하자 **첫 평가에서 `NoCandlesProduced`
+가 곧바로 pending 이 됐다.** 캔들은 정상으로 나오고 있었다.
+
+지표를 그대로 조회해 보니 이유가 분명했다.
+
+```
+increase(flink_..._clickhouseCandleRows[10m])
+   0        subtask_index=1
+   0        subtask_index=0
+   0        subtask_index=2
+   0        subtask_index=1
+   1.0829   subtask_index=2
+   1.0829   subtask_index=0
+              → 합계 2.1938 (정상 생산 중)
+```
+
+이 지표는 **subtask 마다 시리즈가 따로 있다.** 어떤 subtask 는 그 10분 동안
+할당된 종목이 없어 정상적으로 0 이다. 집계 없이 `== 0` 을 걸면 그 시리즈들이
+매칭되고, `and on()` 이 빈 매칭 키로 교차시켜 **파이프라인이 멀쩡한데도 발화한다.**
+
+`sum()` 으로 집계한 뒤에 비교하도록 고쳤다. 체크포인트 실패는 잡이 여러 개일 때
+합계가 의미 없으므로 `max()` 를 쓴다.
+
+> **거짓 양성으로 사람을 깨우는 알람은 없는 알람보다 나쁘다.**
+> 몇 번 반복되면 진짜 알람도 무시하게 된다.
+> 알람은 "켜 두는 것" 이 아니라 **"켠 뒤에 그 판단이 맞는지 확인하는 것"** 까지가 한 벌이다.
+
+#### kafka-exporter 는 Running 인데 아무것도 내주지 않았다
+
+같이 넣은 kafka-exporter 도 파드는 `Running` 인데 스크레이프 타깃은 `down` 이었다.
+로그에는 `Starting kafka_exporter` 한 줄이 전부였다.
+
+`--kafka.server` 를 **compose 값(19092)** 그대로 옮겨 적었는데, K8s Service 는
+9092 로 열려 있었다. exporter 는 Kafka 연결을 먼저 시도하고 그것이 끝나야
+HTTP 리스너를 여는 구조라, 연결을 못 하니 포트를 아예 열지 않았다.
+`Running` 인데 `Connection refused` 인 이유가 이것이다.
+
+#### 같은 일이 반복되지 않게 CI 에 넣었다
+
+원인의 절반은 **검사 도구가 이 영역을 보지 않는다**는 것이었다.
+`helm lint` 는 ConfigMap 의 `data` 안에 든 문자열을 YAML 로 해석하지 않는다.
+
+그래서 CI 에 단계를 추가했다 — 렌더된 매니페스트에서 Prometheus 설정을 꺼내
+`rule_files` 와 `alerting` 이 있는지 확인하고, `promtool check rules` 로
+규칙을 검사한다. 지금은 8개 규칙이 통과한다.
+
 #### 남는 것
 
 이 프로젝트에서 반복해 만난 형태가 또 나왔다 — **"떠 있다" 를 "동작한다" 로 읽었다.**
