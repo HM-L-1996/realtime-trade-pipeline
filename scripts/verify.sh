@@ -76,13 +76,42 @@ q "SELECT conn_id,
           uniqExact(symbol) AS syms,
           toString(round(min(toFloat64(price)))) AS price_min,
           toString(round(max(toFloat64(price)))) AS price_max,
-          toString(min(ingest_time)) AS first_seen
-   FROM rtp.trades_raw GROUP BY conn_id, label ORDER BY trades DESC FORMAT PrettyCompact"
+          toString(min(ingest_time)+INTERVAL 9 HOUR) AS first_kst,
+          toString(max(ingest_time)+INTERVAL 9 HOUR) AS last_kst
+   FROM rtp.trades_raw GROUP BY conn_id, label ORDER BY first_kst FORMAT PrettyCompact"
 
 echo
-echo "   판정: 연결이 2개 이상이면 그 자체로 의심한다. 수집기는 한 번에 하나만 붙는다."
-echo "         가격대가 다른 연결이 섞여 있으면 이름이 무엇이든 **오염이다.**"
-echo "         실제로 당했을 때 실수집은 1,618,000~1,641,000, 합성은 66,563~84,356 이었다."
+echo "   연결이 겹치는가 (두 생산자가 동시에 쓴 구간이 있는가)"
+q "WITH c AS (
+     SELECT conn_id, min(ingest_time) AS t0, max(ingest_time) AS t1
+     FROM rtp.trades_raw GROUP BY conn_id)
+   SELECT a.conn_id AS conn_a, b.conn_id AS conn_b,
+          toString(greatest(a.t0,b.t0)+INTERVAL 9 HOUR) AS overlap_from,
+          toString(least(a.t1,b.t1)+INTERVAL 9 HOUR)   AS overlap_to
+   FROM c a CROSS JOIN c b
+   WHERE a.conn_id < b.conn_id AND a.t0 <= b.t1 AND b.t0 <= a.t1
+   FORMAT PrettyCompact"
+
+echo
+echo "   연결 사이의 공백 (= 되메울 수 없는 유실 구간)"
+q "WITH c AS (
+     SELECT conn_id, min(ingest_time) AS t0, max(ingest_time) AS t1
+     FROM rtp.trades_raw GROUP BY conn_id)
+   SELECT toString(t1 + INTERVAL 9 HOUR) AS gap_start_kst,
+          toString(next_t0 + INTERVAL 9 HOUR) AS gap_end_kst,
+          round(date_diff('millisecond', t1, next_t0)/1000.0, 3) AS gap_seconds
+   FROM (SELECT conn_id, t0, t1, leadInFrame(t0) OVER (ORDER BY t0
+           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS next_t0 FROM c)
+   WHERE next_t0 > t1 FORMAT PrettyCompact"
+
+echo
+echo "   판정 — 연결이 여러 개인 것 자체는 정상이다. 재연결·재배포마다 새로 생긴다."
+echo "         **오염의 신호는 개수가 아니라 아래 둘이다.**"
+echo "         1) 가격대가 다른 연결이 섞여 있다 - 이름이 무엇이든 오염이다."
+echo "            실제로 당했을 때 실수집은 1,618,000~1,641,000, 합성은 66,563~84,356 이었다."
+echo "         2) 시간 구간이 겹친다 - 수집기는 한 번에 하나만 붙으므로, 겹치면"
+echo "            다른 생산자가 같이 쓰고 있었다는 뜻이다. 위 '겹치는가' 표가 비어야 정상이다."
+echo "         연결 사이의 공백은 오염이 아니라 **유실**이다. 되메울 수 없으므로 크기를 기록해 둔다."
 echo "   - 오염 행이 있으면 3번 수치는 **무효다.** 수치가 나온다고 유효한 게 아니다."
 
 echo
