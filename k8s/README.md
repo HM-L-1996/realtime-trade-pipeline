@@ -85,8 +85,8 @@ ArgoCD 가 차트를 동기화해도 이미지가 없으면 `ErrImageNeverPull` 
 
 ```bash
 ./mvnd.sh -pl aggregator -am package -DskipTests
-docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.0 .
-kind load docker-image rtp-aggregator:0.1.0 --name rtp
+docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.1 .
+kind load docker-image rtp-aggregator:0.1.1 --name rtp
 
 kubectl get flinkdeployment -n rtp -w
 ```

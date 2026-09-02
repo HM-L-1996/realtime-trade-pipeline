@@ -33,6 +33,31 @@ FAILED_QUERIES=0
 
 echo "════════ 검증 대상: $TARGET ════════"
 echo
+
+if [ "$TARGET" = "k8s" ]; then
+  echo "── 0. 배포 상태 (지금 도는 것이 지금의 코드인가) ──"
+  echo "   Synced 와 '적용됨' 은 다르다. ArgoCD 가 새 리비전을 Synced 라 하면서"
+  echo "   실제로는 이전 리비전을 적용해 둔 적이 있다. **실제 적용 리비전**을 본다."
+  _head=$(git rev-parse HEAD 2>/dev/null)
+  _cmp=$(kubectl -n argocd get app rtp -o jsonpath='{.status.sync.revision}' 2>/dev/null)
+  _app=$(kubectl -n argocd get app rtp -o jsonpath='{.status.operationState.operation.sync.revision}' 2>/dev/null)
+  _st=$(kubectl -n argocd get app rtp -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)
+  printf "   %-26s %s
+" "로컬 HEAD"            "${_head:0:12}"
+  printf "   %-26s %s
+" "ArgoCD 비교 리비전"   "${_cmp:0:12}"
+  printf "   %-26s %s
+" "ArgoCD 적용 리비전"   "${_app:0:12}"
+  printf "   %-26s %s
+" "상태"                 "$_st"
+  if [ -n "$_head" ] && [ "$_head" != "$_app" ]; then
+    echo "   !! 적용된 리비전이 HEAD 와 다르다. **아래 결과는 지금 코드의 것이 아니다.**"
+    echo "      kubectl -n argocd patch app rtp --type merge \\"
+    echo "        -p '{\"operation\":{\"sync\":{\"revision\":\"'$_head'\",\"prune\":true}}}'"
+  fi
+  echo
+fi
+
 echo "── 1. 수집 (원본 체결) ──"
 echo "   유실은 recv_seq 공백으로 판정한다. gaps>0 유실, gaps<0 중복."
 q "SELECT conn_id, received, gaps, loss_pct, first_seen, last_seen

@@ -883,6 +883,46 @@ increase(flink_..._clickhouseCandleRows[10m])
 HTTP 리스너를 여는 구조라, 연결을 못 하니 포트를 아예 열지 않았다.
 `Running` 인데 `Connection refused` 인 이유가 이것이다.
 
+#### 세 번째 죽은 알람 — 대상이 없는 조건
+
+`kafka_consumergroup_lag` 이 보이기 시작하자 또 하나가 드러났다.
+`ConsumerLagGrowing` 은 `consumergroup="rtp-candle-1m"` 을 보고 있었는데
+**K8s 의 실제 그룹명은 `rtp-candle-k8s`** 였다(compose 값을 그대로 옮겼다).
+
+규칙은 로드됐고 문법도 맞고 `health=ok` 였다. 다만 **매칭되는 시리즈가 하나도
+없어서 영원히 발화하지 않는다.** 앞의 둘과 겉모습이 완전히 같다 —
+초록불이고 오류도 없는데 동작하지 않는다.
+
+접두어로 고르도록 바꿨다(`consumergroup=~"rtp-.*"`). 운영은 `rtp-`,
+실험은 `exp-` 를 쓰기 때문에 실험 그룹이 자동으로 빠진다. 이 구분이 필요한
+이유는 지금도 살아 있다 — 죽은 실험 그룹 `exp-idle0` 이 **lag 115,884** 을
+쌓은 채 남아 있다. 그룹을 합쳐서 보면 알람이 상시 발화한다.
+
+```
+exp-idle0        lag = 115,884   ← 죽은 실험 그룹
+rtp-candle-k8s   lag =     138   ← 실제 잡
+```
+
+이전에 "유령 컨슈머 그룹" 항목에서 관측한 현상이 그대로 남아 있는 셈이고,
+그때 내린 "lag 은 그룹별로 봐야 한다" 는 결론이 여기서 다시 값을 했다.
+
+#### 이번에는 발화까지 확인했다
+
+세 번을 같은 방식으로 틀렸으므로, "고쳤다" 로 끝내지 않고 **경로 전체를 실증**했다.
+kafka-exporter 를 일부러 내려 `ScrapeTargetDown` 을 일으켰다.
+
+| 시각 | 상태 |
+|---|---|
+| 09:45:13 | exporter 를 0 replica 로 내림 |
+| 09:45:53 ~ 09:48:36 | 규칙 `pending` (`for: 3m` 대기) |
+| **09:48:57** | 규칙 `firing`, **Alertmanager 수신 1건** |
+
+Alertmanager 가 받은 내용도 확인했다 — `severity=warning`, 수신처 `default`,
+요약 문구의 `{{ $labels.job }}` 가 `kafka` 로 치환됐다. 확인 후 exporter 를 복구했다.
+
+> 규칙이 로드되는 것 / 발화하는 것 / 전달되는 것은 **전부 다른 일**이다.
+> 이번 항목에서 셋 다 따로 깨져 있었다.
+
 #### 같은 일이 반복되지 않게 CI 에 넣었다
 
 원인의 절반은 **검사 도구가 이 영역을 보지 않는다**는 것이었다.
@@ -970,6 +1010,61 @@ Flink 처리 스레드가 **한 건마다 동기로** 호출하고 있었다.
 회귀 테스트 3개로 고정했다 — `record()` 가 블로킹하지 않는 것,
 큐 포화 시 버리고 세는 것, 실패가 예외로 올라오지 않는 것.
 첫 번째 테스트는 닿지 않는 주소로 3만 건을 밀어 넣는데, 이전 구현이라면 끝나지 않는다.
+
+---
+
+### ArgoCD 가 새 리비전을 "Synced" 라 하면서 적용하지 않았다
+
+**성격: 규명.** 위의 알람 수정을 배포하는 도중에 만났다.
+
+#### 어떻게 드러났나
+
+고친 내용을 푸시하고 ArgoCD 를 새로고침한 뒤 확인했다.
+
+```
+로컬 HEAD             3d0859f
+ArgoCD sync.revision  3d0859f      ← 일치
+sync.status           Synced
+health.status         Healthy
+```
+
+**그런데 클러스터의 실제 값은 옛것이었다.**
+
+```
+kafka-exporter args   --kafka.server=...:19092   (고친 값은 9092)
+NoCandlesProduced     increase(...) == 0          (고친 식은 sum(increase(...)) == 0)
+```
+
+#### 왜 그랬나
+
+`status.sync.revision` 이 아니라 **`status.operationState`** 를 봐야 했다.
+
+```
+operationState.phase                    Succeeded
+operationState.startedAt                00:38:40
+operationState.operation.sync.revision  5346d64   ← 이전 커밋
+```
+
+마지막으로 **실제 적용한** 리비전은 이전 커밋이었다.
+`status.sync.revision` 은 비교 대상으로 삼은 리비전이고,
+그것이 곧 "적용된 리비전" 은 아니다. 두 필드가 다를 수 있다.
+
+명시적으로 sync 를 요청하니 즉시 반영됐다.
+
+```
+kubectl -n argocd patch app rtp --type merge   -p '{"operation":{"sync":{"revision":"<HEAD>","prune":true, ...}}}'
+```
+
+#### 남는 것
+
+이 저장소에는 이미 "리소스는 멀쩡한데 GitOps 가 영원히 빨간불이었다" 는 항목이 있다.
+이번은 **정확히 반대**다 — 초록불인데 적용되지 않았다.
+빨간불은 눈에 띄지만 초록불은 아무도 다시 보지 않으므로, 이쪽이 더 위험하다.
+
+> **GitOps 에서 확인할 필드는 `status.operationState.operation.sync.revision` 이다.**
+> `sync.status: Synced` 와 `sync.revision` 만 보면 적용되지 않은 것을 적용됐다고 읽는다.
+
+`scripts/verify.sh` 에 이 대조를 넣었다. 다음부터는 검증할 때 같이 잡힌다.
 
 ---
 

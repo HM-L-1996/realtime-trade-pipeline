@@ -58,14 +58,22 @@ groups:
       # 쌓여 있는 것만으로는 알람이 아니다. 재시작 직후에는 원래 밀려 있고
       # 곧 따라잡는다. **높으면서 동시에 계속 늘어나는 것**이 신호다.
       - alert: ConsumerLagGrowing
+        #
+        # 그룹명을 하나로 못 박았다가 틀렸다. compose 는 `rtp-candle-1m`,
+        # K8s 는 `rtp-candle-k8s` 인데 앞의 것을 적어 두어서 **영원히 발화하지 않는
+        # 알람**이 되어 있었다. 로드도 되고 문법도 맞고 health=ok 인데 대상이 없었다.
+        #
+        # 그래서 접두어로 고른다. 운영 그룹은 `rtp-`, 실험 그룹은 `exp-` 를 쓴다.
+        # 실험 그룹을 빼는 것이 핵심이다 - 실제로 죽은 실험 그룹 `exp-idle0` 이
+        # lag 115,884 을 쌓은 채 남아 있고, 그것까지 세면 알람이 상시 발화한다.
         expr: |
           sum by (consumergroup) (
-            kafka_consumergroup_lag{consumergroup="rtp-candle-1m"}
+            kafka_consumergroup_lag{consumergroup=~"rtp-.*"}
           ) > 20000
           and
           deriv(
             sum by (consumergroup) (
-              kafka_consumergroup_lag{consumergroup="rtp-candle-1m"}
+              kafka_consumergroup_lag{consumergroup=~"rtp-.*"}
             )[10m:1m]
           ) > 0
         for: 10m
