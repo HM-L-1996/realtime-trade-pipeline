@@ -35,7 +35,18 @@ groups:
       # 체크포인트 실패. 방치하면 재처리 구간이 계속 늘어난다.
       - alert: CheckpointsFailing
         # 잡이 여러 개면 합계는 의미가 없다. 가장 나쁜 잡을 본다.
-        expr: max(increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m])) > 3
+        #
+        # **막 재시작한 잡은 제외한다.** savepoint 재배포 직후에는 체크포인트가
+        # 몇 번 실패하는 것이 정상이다. 실제로 이 알람을 켜고 첫 재배포에서
+        # 곧바로 pending 이 됐다(10분간 3.08회). 그것으로 사람을 깨우면
+        # "배포할 때마다 울리는 알람" 이 되고, 그러면 곧 무시된다.
+        # uptime 은 ms 단위이므로 600000 = 10분이다.
+        expr: |
+          max by (job_name) (
+            increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m])
+          ) > 3
+          and on (job_name)
+          max by (job_name) (flink_jobmanager_job_uptime) > 600000
         for: 5m
         labels: { severity: page }
         annotations:
