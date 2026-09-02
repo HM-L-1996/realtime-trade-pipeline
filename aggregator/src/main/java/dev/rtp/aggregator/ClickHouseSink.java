@@ -115,9 +115,11 @@ public class ClickHouseSink<T> implements Sink<T>, Serializable {
                 + ",\"volume\":" + ClickHouseHttp.quote(t.volume())
                 + ",\"recv_seq\":" + t.recvSeq()
                 + ",\"conn_id\":" + ClickHouseHttp.quote(t.connId())
-                // Kafka 좌표는 아직 채우지 않는다. 원본 체결의 신원은 conn_id + recv_seq
-                // 로 충분하고, 파티션/오프셋은 소스 자체가 아니라 전송 경로의 속성이다.
-                + ",\"kafka_partition\":0,\"kafka_offset\":0}";
+                // 전송 경로의 좌표. 파티션 재배정·순서 실험에서 이 값이 근거가 된다.
+                // 예전에는 여기에 상수 0 을 넣고 있었다 - 컬럼은 있는데 값이 없어서,
+                // 파티션 분포를 조회하면 "전부 0번" 이라는 거짓 답이 나왔다.
+                + ",\"kafka_partition\":" + t.kafkaPartition()
+                + ",\"kafka_offset\":" + t.kafkaOffset() + "}";
     }
 
     /** 실제 적재를 수행한다. 서브태스크마다 하나씩 만들어진다. */

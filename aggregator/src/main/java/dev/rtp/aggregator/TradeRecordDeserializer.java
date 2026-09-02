@@ -108,7 +108,9 @@ public class TradeRecordDeserializer implements KafkaRecordDeserializationSchema
                 warnOnce("가격/수량 누락", record.partition(), record.offset());
                 return;
             }
-            out.collect(t);
+            // 전송 경로의 좌표를 여기서 붙인다. 페이로드에는 없는 값이고,
+            // ConsumerRecord 를 들고 있는 곳이 여기뿐이다.
+            out.collect(t.withKafkaCoords(record.partition(), record.offset()));
         } catch (Exception e) {
             malformedJson.inc();
             toDeadLetter("malformed-json", "", record.value());

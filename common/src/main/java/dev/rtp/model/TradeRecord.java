@@ -1,5 +1,6 @@
 package dev.rtp.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -33,7 +34,39 @@ public record TradeRecord(
         @JsonProperty("volume") String volume,
         @JsonProperty("currency") String currency,
         @JsonProperty("conn_id") String connId,
-        @JsonProperty("recv_seq") long recvSeq) {
+        @JsonProperty("recv_seq") long recvSeq,
+
+        // ── 아래 둘은 전송 경로의 좌표다. 소스가 준 것이 아니라 소비 시점에 붙는다. ──
+        //
+        // 페이로드에는 넣지 않는다(@JsonIgnore). 생산자가 쓸 수 있는 값이 아니고,
+        // 넣으면 같은 체결이 토픽마다 다른 값을 갖게 되어 오해를 만든다.
+        //
+        // **이 둘을 채우게 된 계기가 있다.** trades_raw 에 kafka_partition /
+        // kafka_offset 컬럼이 있었는데 싱크가 상수 0 을 넣고 있었다. 24만 행이
+        // 전부 0/0 이었다. 파티션 배정을 확인하려고 그 컬럼을 읽었다가
+        // "두 종목이 같은 파티션에 있다" 는 잘못된 결론을 낼 뻔했다 -
+        // Kafka 에서 직접 확인하니 005930 은 partition 2 였다.
+        // 채우지 않을 것이면 컬럼을 두지 말아야 하고, 둘 것이면 채워야 한다.
+        @JsonIgnore int kafkaPartition,
+        @JsonIgnore long kafkaOffset) {
+
+    /** 아직 Kafka 를 거치지 않은 레코드. 생산 측(수집기·합성기·리플레이)이 쓴다. */
+    public TradeRecord(String symbol, long eventMs, int seqInMs, long ingestMs,
+                       String price, String volume, String currency,
+                       String connId, long recvSeq) {
+        this(symbol, eventMs, seqInMs, ingestMs, price, volume, currency,
+                connId, recvSeq, UNKNOWN_PARTITION, UNKNOWN_OFFSET);
+    }
+
+    /** 아직 좌표를 모른다는 표시. 0 을 쓰면 "0번 파티션" 과 구별되지 않는다. */
+    public static final int UNKNOWN_PARTITION = -1;
+    public static final long UNKNOWN_OFFSET = -1L;
+
+    /** 소비 시점에 Kafka 좌표를 붙인 사본을 돌려준다. */
+    public TradeRecord withKafkaCoords(int partition, long offset) {
+        return new TradeRecord(symbol, eventMs, seqInMs, ingestMs, price, volume,
+                currency, connId, recvSeq, partition, offset);
+    }
 
     // 멱등키는 (symbol, eventMs, seqInMs) 다. 그 조합을 만드는 메서드를 여기 두었었는데
     // 어디에서도 호출되지 않는 죽은 코드였다. 실제 키는 ClickHouse 의
