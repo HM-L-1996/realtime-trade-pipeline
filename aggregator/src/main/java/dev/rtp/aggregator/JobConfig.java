@@ -29,6 +29,11 @@ public record JobConfig(
         String startOffsets,
         String candlesTable,
         Duration partitionDiscovery,
+        boolean icebergEnabled,
+        String icebergCatalogUri,
+        String icebergWarehouse,
+        String icebergTable,
+        String s3Endpoint,
         String runId) {
 
     public static JobConfig from(String[] args) {
@@ -82,6 +87,16 @@ public record JobConfig(
                 // 0 이하로 주면 끄는 것이고, 그때의 거동을 보려면 실험에서 0을 준다.
                 Duration.ofSeconds(p.getLong("partition-discovery-seconds", 30)),
 
+                // 두 번째 싱크. ClickHouse 를 대체하는 것이 아니라 **나란히** 쓴다.
+                // 전달 보장이 다르므로(at-least-once vs exactly-once) 같은 입력에서
+                // 결과가 어떻게 갈리는지를 결과로 보이기 위한 것이다.
+                // 기본은 꺼 둔다 - 카탈로그가 없는 환경에서 잡이 시작조차 못 하면 안 된다.
+                p.getBoolean("iceberg-enabled", envOr("ICEBERG_ENABLED", "false").equals("true")),
+                p.get("iceberg-catalog-uri", envOr("ICEBERG_CATALOG_URI", "http://iceberg-rest:8181")),
+                p.get("iceberg-warehouse", envOr("ICEBERG_WAREHOUSE", "s3://warehouse/")),
+                p.get("iceberg-table", envOr("ICEBERG_TABLE", "rtp.candles_1m")),
+                p.get("s3-endpoint", envOr("S3_ENDPOINT", "http://minio:9000")),
+
                 p.get("run-id", "run-" + System.currentTimeMillis()));
     }
 
@@ -93,10 +108,12 @@ public record JobConfig(
     /** 실행 조건을 로그와 runId 에 남긴다. 나중에 결과를 설정과 대조하기 위한 것. */
     public String describe() {
         return ("window=%ds watermarkDelay=%ds idleness=%ds allowedLateness=%ds "
-                + "topic=%s offsets=%s table=%s partitionDiscovery=%ds runId=%s").formatted(
+                + "topic=%s offsets=%s table=%s partitionDiscovery=%ds "
+                + "iceberg=%s runId=%s").formatted(
                 windowSize.toSeconds(), watermarkDelay.toSeconds(),
                 idleness.toSeconds(), allowedLateness.toSeconds(),
                 topic, startOffsets, candlesTable,
-                partitionDiscovery.toSeconds(), runId);
+                partitionDiscovery.toSeconds(),
+                icebergEnabled ? icebergTable : "off", runId);
     }
 }

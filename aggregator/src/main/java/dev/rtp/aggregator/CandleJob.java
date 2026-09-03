@@ -111,6 +111,19 @@ public final class CandleJob {
                 .name("clickhouse-candles")
                 .uid("clickhouse-candles");
 
+        // 두 번째 싱크. **대체가 아니라 병행이다.**
+        //
+        // ClickHouse 는 배치가 차면 바로 쓰므로 at-least-once 이고, 재시작하면
+        // 같은 윈도가 다시 쓰인다(실측 420개). Iceberg 는 체크포인트 완료 시점에
+        // 커밋하므로 exactly-once 이고, 커밋 전 파일은 버려진다.
+        //
+        // 같은 스트림을 두 곳에 흘려서 그 차이를 **결과로** 비교할 수 있게 한다.
+        // 대가는 지연이다 - Iceberg 쪽은 체크포인트 주기(10초)만큼 늦게 보인다.
+        if (cfg.icebergEnabled()) {
+            IcebergCandleSink.ensureTable(cfg);
+            IcebergCandleSink.attach(candles, cfg);
+        }
+
         // 원본 체결 보관. recv_seq 공백으로 소스 유실을 재기 위한 것이다.
         // 이게 없으면 공식 캔들과의 차이가 내 버그인지 소스 유실인지 끝까지 구분되지 않는다.
         // (--archive-trades false 로 끌 수 있다. 적재량이 캔들의 수백 배다.)

@@ -153,4 +153,23 @@ spec:
       - {{ .Values.flink.job.archiveTrades | quote }}
       - --run-id
       - {{ .Values.flink.job.runId | quote }}
+      {{- if .Values.icebergRest.enabled }}
+      {{/*
+        두 번째 싱크. ClickHouse 를 대체하지 않고 **나란히** 쓴다.
+        전달 보장이 달라서(at-least-once vs exactly-once) 같은 입력에서
+        결과가 어떻게 갈리는지를 비교할 수 있게 하려는 것이다.
+        자격증명은 여기 두지 않는다 - podTemplate 이 AWS_* 를 Secret 에서 주입하고
+        S3FileIO 가 기본 자격증명 체인에서 읽는다.
+      */}}
+      - --iceberg-enabled
+      - "true"
+      - --iceberg-catalog-uri
+      - http://iceberg-rest.{{ .Release.Namespace }}.svc.cluster.local:8181
+      - --iceberg-warehouse
+      - s3://{{ .Values.minio.bucket }}/
+      - --iceberg-table
+      - {{ .Values.flink.job.icebergTable | quote }}
+      - --s3-endpoint
+      - http://minio.{{ .Release.Namespace }}.svc.cluster.local:9000
+      {{- end }}
 {{- end }}

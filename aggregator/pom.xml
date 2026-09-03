@@ -66,6 +66,18 @@
       <artifactId>iceberg-flink-runtime-1.20</artifactId>
       <version>${iceberg.version}</version>
     </dependency>
+
+    <!--
+      RowData / DecimalData / TimestampData 를 쓰기 위한 것이다.
+      Flink 배포본의 /opt/flink/lib 에 flink-table-runtime 이 이미 있으므로
+      provided 로 둔다 - fat jar 에 넣으면 런타임에 클래스가 두 벌이 된다.
+    -->
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-table-common</artifactId>
+      <version>${flink.version}</version>
+      <scope>provided</scope>
+    </dependency>
     <!--
       S3(MinIO) 접근에 hadoop-aws 를 쓰지 않는다. Hadoop 을 끌어오면 fat jar 이
       384MB 가 되고(실측) 클래스 로딩 충돌 위험도 커진다.

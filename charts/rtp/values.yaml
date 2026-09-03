@@ -41,9 +41,11 @@ minio:
   bucket: warehouse
 
 icebergRest:
-  # Iceberg 싱크를 붙이기 전까지는 쓰이지 않는다. 기본 꺼 둔다 -
-  # 쓰이지 않는 컴포넌트가 떠 있으면 "정리 안 된 상태" 로 읽힌다.
-  enabled: false
+  # 두 번째 싱크(Iceberg)를 위한 REST 카탈로그.
+  # 켜면 캔들이 ClickHouse 와 Iceberg **양쪽에** 쓰인다. 대체가 아니라 병행이다.
+  # 두 싱크의 전달 보장이 달라서(at-least-once vs exactly-once)
+  # 재시작 시 중복이 어떻게 갈리는지를 결과로 비교할 수 있다.
+  enabled: true
   image: apache/iceberg-rest-fixture:1.9.1
 
 # 수집기. 자격 증명은 차트에 없다 - 배포 전에 Secret 을 따로 만든다:
@@ -85,7 +87,7 @@ flink:
   # 그대로라 Operator 가 변경을 감지하지 못하고, 파드는 노드에 캐시된 옛 이미지를
   # 계속 쓴다. imagePullPolicy: Never 라 더욱 그렇다.
   # 태그를 올리면 spec 이 바뀌므로 upgradeMode: savepoint 경로를 타고 재배포된다.
-  image: rtp-aggregator:0.1.3
+  image: rtp-aggregator:0.1.4
   # kind load 로 노드에 적재한 로컬 이미지다. 레지스트리에서 받으려 하면 실패한다.
   imagePullPolicy: Never
   version: v1_20
@@ -105,6 +107,8 @@ flink:
     topic: trades.raw
     groupId: rtp-candle-k8s
     runId: k8s-wm5
+    # Iceberg 쪽 테이블. 네임스페이스를 포함해야 한다.
+    icebergTable: rtp.candles_1m
     # validation.md 의 "설정 변경에 따른 정확도 변화" 표가 이 값들을 바꿔가며 나온다.
     watermarkDelaySeconds: 5
     idlenessSeconds: 10
