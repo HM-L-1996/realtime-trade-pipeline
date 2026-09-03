@@ -62,6 +62,14 @@ spec:
     s3.endpoint: http://minio.rtp.svc.cluster.local:9000
     s3.path.style.access: "true"
     restart-strategy.type: exponential-delay
+    # **메트릭 리포터를 반드시 붙인다.**
+    #
+    # 실험 잡 세 개가 이걸 빠뜨려서 Prometheus 로 아무것도 내보내지 않았다.
+    # 스크레이프 타깃은 `up` 이라 초록불이었고, 정작 볼 것이 하나도 없어
+    # 실험 내내 Flink REST API 와 Kafka CLI 로 손으로 읽었다.
+    # 장애 실험의 목적이 "무엇을 보고 알아챌 수 있는가" 인데 그걸 못 본 셈이다.
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
 
     # 재스케일 시 상태를 다시 나누려면 최대 병렬도가 고정돼 있어야 한다.
     pipeline.max-parallelism: "24"

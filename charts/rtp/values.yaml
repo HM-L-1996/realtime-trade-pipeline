@@ -74,6 +74,9 @@ observability:
   prometheusImage: prom/prometheus:v3.1.0
   grafanaImage: grafana/grafana:11.4.0
   alertmanagerImage: prom/alertmanager:v0.28.0
+  # 지표 이력을 Pod 재생성 너머로 보존한다. 장애 실험의 파형이 핵심 근거라
+  # emptyDir 로는 설정 한 번 고칠 때마다 사라진다 - 실제로 잃었다.
+  prometheusStorage: 20Gi
   kafkaExporterImage: danielqsj/kafka-exporter:v1.8.0
 
 flink:

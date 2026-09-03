@@ -43,6 +43,16 @@ data:
 {{ (.Files.Glob "files/prometheus/*.yml").AsConfig | indent 2 }}
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.observability.prometheusStorage | quote }}
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: prometheus
@@ -57,6 +67,9 @@ metadata:
   name: prometheus
 spec:
   replicas: 1
+  {{/* RWO 볼륨이라 새 Pod 을 띄우기 전에 옛 Pod 을 내려야 한다. */}}
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: prometheus }
   template:
@@ -87,12 +100,21 @@ spec:
         - name: config
           configMap: { name: prometheus-config }
         {{/*
-          emptyDir 다. Pod 이 죽으면 지표 이력이 사라진다.
-          실험 중에만 쓰는 용도라 감수한다 - PVC 를 붙이면 노드 고정 문제가 생기고
-          이 프로젝트가 채우려는 공백과 무관한 작업이 늘어난다.
+          처음에는 emptyDir 였다. "실험 중에만 쓰는 용도라 감수한다" 고 적어 두었는데,
+          **그 대가를 실제로 치렀다.**
+
+          설정을 고칠 때마다 Pod 이 재생성되고 그때마다 지표 이력이 사라진다.
+          소스 단절·JobManager kill·파티션 재배정 실험의 지표 파형이 그렇게 없어졌다.
+          이 저장소의 핵심 산출물이 장애 기록인데, 그 기록의 근거가 되는
+          그래프가 남지 않는다면 계측을 해 둔 의미가 절반이다.
+
+          kind 의 기본 StorageClass(local-path)는 노드에 고정되지만
+          단일 레플리카라 문제가 되지 않는다. RWO 라 롤링 업데이트 중
+          두 Pod 이 같은 볼륨을 잡으면 안 되므로 strategy 를 Recreate 로 둔다.
         */}}
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: prometheus-data
 ---
 apiVersion: v1
 kind: Service
