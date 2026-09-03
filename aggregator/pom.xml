@@ -79,14 +79,42 @@
       <scope>provided</scope>
     </dependency>
     <!--
-      S3(MinIO) 접근에 hadoop-aws 를 쓰지 않는다. Hadoop 을 끌어오면 fat jar 이
+      S3(MinIO) 접근에 hadoop-aws 를 쓰지 않는다. 통째로 끌어오면 fat jar 이
       384MB 가 되고(실측) 클래스 로딩 충돌 위험도 커진다.
-      Iceberg 자체 S3FileIO + AWS SDK v2 번들이면 Hadoop 없이 된다.
+      파일 입출력은 Iceberg 자체 S3FileIO + AWS SDK v2 번들로 한다.
     -->
     <dependency>
       <groupId>org.apache.iceberg</groupId>
       <artifactId>iceberg-aws-bundle</artifactId>
       <version>${iceberg.version}</version>
+    </dependency>
+
+    <!--
+      **Hadoop 클래스가 "로드 가능" 하기만 하면 된다.**
+
+      처음에는 "Iceberg S3FileIO 를 쓰면 Hadoop 이 아예 필요 없다" 고 적어 두었는데
+      틀렸다. Iceberg 의 SerializableTable 이 FileIO 종류와 관계없이
+      `instanceof HadoopConfigurable` 검사를 하고, 그 인터페이스가
+      org.apache.hadoop.conf.Configurable 을 상속하기 때문이다.
+      실제로 잡이 이렇게 죽었다.
+
+        NoClassDefFoundError: org/apache/hadoop/conf/Configurable
+          at org.apache.iceberg.SerializableTable.fileIO(SerializableTable.java:127)
+
+      우리는 Hadoop 파일시스템을 **쓰지 않는다.** 타입 검사에 필요할 뿐이다.
+      그래서 전이 의존성을 전부 끊고 hadoop-common 한 개만 넣는다 -
+      그러지 않으면 guava·jetty·kerby 까지 따라와 jar 이 폭증한다.
+    -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-common</artifactId>
+      <version>${hadoop.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
