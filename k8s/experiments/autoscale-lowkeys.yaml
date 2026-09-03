@@ -1,0 +1,134 @@
+# 실험 A: 오토스케일 — 키가 적으면 스케일아웃이 소용이 있는가
+#
+# 질문은 "스케일아웃이 실제로 도움이 되는가, 상태 재분배 비용이 더 크지는 않은가" 다.
+#
+# 이 실험(A)은 **운영과 같은 모양**이다. 종목 2개.
+# 미리 계산해 둔 것: Kafka 기본 파티셔너로 종목 2개는 6개 파티션 중 **2개만** 채운다.
+#
+#   005930 -> partition 2
+#   000660 -> partition 1
+#   나머지 0,3,4,5 는 영원히 비어 있다
+#
+# 그러면 병렬도를 아무리 올려도 **일할 수 있는 subtask 는 2개뿐**이다.
+# 오토스케일러가 그것을 알아채는지, 아니면 올렸다가 되돌리는지를 본다.
+#
+# 대조군은 autoscale-highkeys.yaml (종목 24개 = 파티션 6개를 고루 채움).
+#
+# 실행
+#   kafka-topics.sh --create --topic trades.exp.scaleA --partitions 6 --replication-factor 1
+#   kubectl apply -f k8s/experiments/autoscale-lowkeys.yaml
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scale-load-a
+  namespace: rtp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: synth
+          image: rtp-ingester:0.1.2
+          imagePullPolicy: Never
+          command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
+          # 병렬도 1 의 처리 상한이 약 6,370건/s 였다(원본 적재 켠 상태).
+          # 그보다 확실히 위로 넣어야 백프레셔가 생긴다.
+          args: ["--rate", "12000", "--duration", "1500", "--symbols", "005930,000660", "--seed", "31"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.rtp.svc.cluster.local:9092
+            - name: KAFKA_TRADES_TOPIC
+              value: trades.exp.scaleA
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits: { memory: 1Gi }
+---
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: exp-scale-a
+  namespace: rtp
+spec:
+  image: rtp-aggregator:0.1.3
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    parallelism.default: "1"
+    state.backend.type: hashmap
+    execution.checkpointing.interval: 10s
+    execution.checkpointing.dir: s3://warehouse/flink-exp/checkpoints
+    execution.checkpointing.savepoint-dir: s3://warehouse/flink-exp/savepoints
+    s3.endpoint: http://minio.rtp.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    restart-strategy.type: exponential-delay
+
+    # 재스케일 시 상태를 다시 나누려면 최대 병렬도가 고정돼 있어야 한다.
+    pipeline.max-parallelism: "24"
+
+    # ── 오토스케일러 ────────────────────────────────────────────────
+    # 기본값은 관측 창이 길어(수십 분) 한 세션 안에서 결과를 보기 어렵다.
+    # 실험이므로 짧게 잡는다. **운영에 이 값을 그대로 쓰면 안 된다** -
+    # 짧은 창은 일시적 요동에 반응해 불필요한 재시작을 만든다.
+    job.autoscaler.enabled: "true"
+    job.autoscaler.stabilization.interval: 1m
+    job.autoscaler.metrics.window: 3m
+    job.autoscaler.target.utilization: "0.6"
+    job.autoscaler.target.utilization.boundary: "0.1"
+    job.autoscaler.restart.time: 2m
+    job.autoscaler.scale-up.grace-period: 1m
+    job.autoscaler.vertex.max-parallelism: "6"
+    job.autoscaler.vertex.min-parallelism: "1"
+    # 올렸는데 처리량이 안 늘면 다시 올리지 않게 하는 장치.
+    # **이 실험이 보려는 것이 정확히 이 판단이다.**
+    job.autoscaler.scaling.effectiveness.detection.enabled: "true"
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+  jobManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  taskManager:
+    resource: { memory: "1536m", cpu: 0.5 }
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: 1
+    # 재스케일마다 savepoint 를 뜨고 다시 띄운다. **그 시간이 곧 재분배 비용이다.**
+    upgradeMode: savepoint
+    state: running
+    args:
+      - --topic
+      - trades.exp.scaleA
+      - --group-id
+      - exp-scale-a
+      - --start-offsets
+      - earliest
+      - --bootstrap-servers
+      - kafka.rtp.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.rtp.svc.cluster.local:8123
+      - --candles-table
+      - rtp.candles_exp
+      - --run-id
+      - scale-a
+      - --idleness-seconds
+      - "10"
+      - --partition-discovery-seconds
+      - "30"
+      # 원본 적재를 켜서 일부러 병목을 만든다. 병렬도 1 에서 약 6,370건/s 가 상한이었다.
+      - --archive-trades
+      - "true"
