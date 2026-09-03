@@ -1814,6 +1814,86 @@ RWO 라 롤링 업데이트 중 두 Pod 이 같은 볼륨을 잡으면 안 되�
 
 ---
 
+### Iceberg 싱크를 붙이며 만난 것 두 가지 (자초 · 진행 중)
+
+**성격: 자초.** 두 번째 싱크(Iceberg)를 붙이는 과정에서 나왔다.
+**아직 실데이터로 끝까지 확인하지 못했다** — 그 상태 그대로 적는다.
+
+#### 1. "S3FileIO 를 쓰면 Hadoop 이 필요 없다" 는 틀렸다
+
+`aggregator/pom.xml` 에 이렇게 적어 두었었다.
+
+> S3(MinIO) 접근에 hadoop-aws 를 쓰지 않는다. Hadoop 을 끌어오면 fat jar 이
+> 384MB 가 되고(실측) ... Iceberg 자체 S3FileIO + AWS SDK v2 번들이면 **Hadoop 없이 된다.**
+
+마지막 문장이 틀렸다. 잡이 이렇게 죽었다.
+
+```
+NoClassDefFoundError: org/apache/hadoop/conf/Configurable
+  at org.apache.iceberg.SerializableTable.fileIO(SerializableTable.java:127)
+  at org.apache.iceberg.flink.sink.FlinkSink$Builder.appendWriter
+```
+
+`SerializableTable` 이 **FileIO 종류와 관계없이** `instanceof HadoopConfigurable`
+검사를 하고, 그 인터페이스가 `org.apache.hadoop.conf.Configurable` 을 상속한다.
+REST 카탈로그를 쓰든 S3FileIO 를 쓰든 **클래스가 로드 가능해야 한다.**
+
+Hadoop 파일시스템을 쓰는 것은 여전히 아니다. 타입 검사에만 필요하므로
+전이 의존성을 전부 끊고 `hadoop-common` 하나만 넣었다.
+**fat jar 116MB → 120MB.** 통째로 끌어왔을 때의 384MB 와 대비된다.
+
+> 앞서 `TableLoader` 를 직접 구현해 Hadoop 을 피한 것(`RestTableLoader`)은
+> 여전히 유효하다 — `CatalogLoader.rest` 는 Hadoop `Configuration` **객체**를
+> 요구하고, 이쪽은 클래스가 **로드 가능**하기만 하면 된다. 요구 수준이 다르다.
+
+#### 2. MinIO 는 리전을 안 쓰는데 AWS SDK 는 리전이 없으면 못 뜬다
+
+Hadoop 문제를 고치니 다음이 나왔다.
+
+```
+SdkClientException: Unable to load region from any of the providers in the chain
+  at org.apache.iceberg.aws.s3.S3FileIO.newOutputFile
+  at org.apache.iceberg.io.OutputFileFactory.newOutputFile
+```
+
+증상이 헷갈렸다 — **카탈로그 조회는 되는데 파일 쓰기만 실패했다.**
+REST 카탈로그 컨테이너에는 차트가 `AWS_REGION` 을 넣어 두었는데
+**TaskManager 에는 없었기** 때문이다. 카탈로그 작업은 REST 서버가 하고
+파일 쓰기는 TaskManager 가 하므로, 둘의 환경이 다르면 이렇게 갈린다.
+
+환경변수에 의존하지 않고 카탈로그 속성(`client.region`)으로 실어 보냈다.
+그 속성은 직렬화되어 TaskManager 까지 같이 간다.
+
+#### 지금 상태
+
+- 잡 그래프에 Iceberg 연산자 두 개가 붙는 것까지 확인했다
+  (`IcebergStreamWriter`, `IcebergFilesCommitter`).
+- 테이블과 네임스페이스는 REST 카탈로그에 만들어졌고
+  MinIO 에 `warehouse/rtp/candles_1m/metadata/` 가 생겼다.
+- **데이터 파일은 아직 하나도 커밋되지 않았다.** 위 두 오류로 writer 가
+  계속 실패했기 때문이다. 리전 수정본(이미지 0.1.6)은 빌드했지만
+  **실데이터로 검증하지 못했다.**
+
+#### 남은 일 — 이 싱크의 존재 이유
+
+두 싱크의 전달 보장이 다르다는 것을 **결과로** 보이는 실험이 남았다.
+`k8s/experiments/dual-sink.yaml` 에 준비해 두었다.
+
+**비교 조건을 정확히 잡아야 한다.** `--start-offsets earliest` 로 재제출하는 것은
+"의도적 재처리" 이고 그러면 **양쪽 다** 다시 쓴다. Iceberg 라고 중복이 안 생기는
+것이 아니다. 차이는 **장애 복구**에서 나타난다.
+
+| | 마지막 체크포인트 이후 처리된 레코드 |
+|---|---|
+| ClickHouse | 이미 HTTP 로 보냈다 → 재처리분과 겹쳐 **중복** |
+| Iceberg | 커밋 전 파일이라 **버려진다** → 중복 없음 |
+
+그래서 실험은 TaskManager 를 강제 종료해 그 구간을 만든다.
+체크포인트 주기를 30초로 늘려 "쓴 뒤 커밋 전" 구간을 넓혀 두었다
+(싱크 플러시가 5초라 그 사이에 확실히 쓰인다).
+
+---
+
 ## (템플릿)
 
 ### [실험명]

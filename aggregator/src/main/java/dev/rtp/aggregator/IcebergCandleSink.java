@@ -177,6 +177,17 @@ public final class IcebergCandleSink {
         p.put("io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
         p.put("s3.endpoint", cfg.s3Endpoint());
         p.put("s3.path-style-access", "true");
+        // **리전을 반드시 준다.** MinIO 는 리전을 쓰지 않지만 AWS SDK v2 는
+        // 리전이 없으면 클라이언트를 만들지 못하고 이렇게 죽는다.
+        //
+        //   SdkClientException: Unable to load region from any of the providers in the chain
+        //     at org.apache.iceberg.aws.s3.S3FileIO.newOutputFile
+        //
+        // REST 카탈로그 컨테이너에는 AWS_REGION 이 들어 있었는데 TaskManager 에는
+        // 없어서, 카탈로그 조회는 되고 **파일 쓰기만** 실패했다.
+        // 환경변수에 의존하지 않고 카탈로그 속성으로 실어 보낸다 -
+        // 이 값은 직렬화되어 TaskManager 까지 같이 간다.
+        p.put("client.region", cfg.s3Region());
         return p;
     }
 }

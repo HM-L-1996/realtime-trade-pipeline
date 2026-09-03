@@ -34,6 +34,7 @@ public record JobConfig(
         String icebergWarehouse,
         String icebergTable,
         String s3Endpoint,
+        String s3Region,
         String runId) {
 
     public static JobConfig from(String[] args) {
@@ -96,6 +97,9 @@ public record JobConfig(
                 p.get("iceberg-warehouse", envOr("ICEBERG_WAREHOUSE", "s3://warehouse/")),
                 p.get("iceberg-table", envOr("ICEBERG_TABLE", "rtp.candles_1m")),
                 p.get("s3-endpoint", envOr("S3_ENDPOINT", "http://minio:9000")),
+                // MinIO 는 리전을 쓰지 않지만 AWS SDK v2 가 없으면 클라이언트를
+                // 만들지 못한다. 형식상 필요한 값이다.
+                p.get("s3-region", envOr("AWS_REGION", "us-east-1")),
 
                 p.get("run-id", "run-" + System.currentTimeMillis()));
     }

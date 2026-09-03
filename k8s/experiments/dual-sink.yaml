@@ -1,0 +1,132 @@
+# 실험: 같은 스트림을 두 싱크에 흘리고 장애 복구 시 중복을 비교한다
+#
+# ClickHouse 싱크는 배치가 차면 바로 HTTP 로 보낸다     -> at-least-once
+# Iceberg 싱크는 체크포인트가 완료될 때 커밋한다        -> exactly-once
+#
+# **무엇을 비교하는지 분명히 해야 한다.**
+# `--start-offsets earliest` 로 재제출하는 것은 "의도적 재처리" 이고,
+# 그러면 **양쪽 다** 다시 쓴다. Iceberg 라고 중복이 안 생기는 것이 아니다.
+#
+# 차이가 나타나는 곳은 **장애 복구**다. 마지막 체크포인트 이후에 처리된 레코드는
+#   - ClickHouse: 이미 HTTP 로 보냈으므로 남아 있다 -> 재처리분과 겹쳐 중복
+#   - Iceberg   : 커밋 전 파일이라 버려진다        -> 중복 없음
+#
+# 그래서 이 실험은 TaskManager 를 강제 종료해서 그 구간을 만든다.
+#
+# 체크포인트 주기를 일부러 30초로 늘렸다. 10초면 "쓴 뒤 커밋 전" 구간이 좁아
+# 효과가 잘 안 잡힌다. 싱크 플러시는 5초라 그 사이에 확실히 쓰이게 된다.
+#
+# 실행
+#   kafka-topics.sh --create --topic trades.exp.dual --partitions 3 --replication-factor 1
+#   kubectl apply -f k8s/experiments/dual-sink.yaml
+#   (2~3분 뒤) kubectl -n rtp delete pod -l app=exp-dual,component=taskmanager --force
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dual-load
+  namespace: rtp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: synth
+          image: rtp-ingester:0.1.2
+          imagePullPolicy: Never
+          command: ["java", "-cp", "/app/ingester.jar", "dev.rtp.ingester.SyntheticMain"]
+          # 캔들이 꾸준히 닫히도록 적당한 속도로 넣는다. 부하 실험이 아니다.
+          args: ["--rate", "200", "--duration", "900", "--symbols", "005930,000660", "--seed", "55"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka.rtp.svc.cluster.local:9092
+            - name: KAFKA_TRADES_TOPIC
+              value: trades.exp.dual
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: exp-dual
+  namespace: rtp
+spec:
+  image: rtp-aggregator:0.1.5
+  imagePullPolicy: Never
+  flinkVersion: v1_20
+  serviceAccount: flink
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    parallelism.default: "2"
+    state.backend.type: hashmap
+    # 30초. "쓴 뒤 커밋 전" 구간을 넓혀 두 싱크의 차이가 드러나게 한다.
+    execution.checkpointing.interval: 30s
+    execution.checkpointing.mode: EXACTLY_ONCE
+    execution.checkpointing.dir: s3://warehouse/flink-exp/checkpoints
+    execution.checkpointing.savepoint-dir: s3://warehouse/flink-exp/savepoints
+    s3.endpoint: http://minio.rtp.svc.cluster.local:9000
+    s3.path.style.access: "true"
+    restart-strategy.type: exponential-delay
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+  podTemplate:
+    spec:
+      containers:
+        - name: flink-main-container
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+  jobManager:
+    resource: { memory: "1024m", cpu: 0.3 }
+  taskManager:
+    resource: { memory: "1536m", cpu: 0.5 }
+  job:
+    jarURI: local:///opt/flink/usrlib/aggregator.jar
+    entryClass: dev.rtp.aggregator.CandleJob
+    parallelism: 2
+    upgradeMode: stateless
+    state: running
+    args:
+      - --topic
+      - trades.exp.dual
+      - --group-id
+      - exp-dual
+      - --start-offsets
+      - earliest
+      - --bootstrap-servers
+      - kafka.rtp.svc.cluster.local:9092
+      - --clickhouse-url
+      - http://clickhouse.rtp.svc.cluster.local:8123
+      - --candles-table
+      - rtp.candles_exp
+      - --run-id
+      - dual
+      - --idleness-seconds
+      - "10"
+      - --watermark-delay-seconds
+      - "5"
+      - --partition-discovery-seconds
+      - "30"
+      # 원본은 적재하지 않는다. trades_raw 는 실데이터 검증용이라 섞이면 안 된다.
+      - --archive-trades
+      - "false"
+      # 같은 캔들을 Iceberg 에도 쓴다. 운영 테이블과 섞이지 않게 별도 테이블이다.
+      - --iceberg-enabled
+      - "true"
+      - --iceberg-catalog-uri
+      - http://iceberg-rest.rtp.svc.cluster.local:8181
+      - --iceberg-warehouse
+      - s3://warehouse/
+      - --iceberg-table
+      - rtp.candles_dual
+      - --s3-endpoint
+      - http://minio.rtp.svc.cluster.local:9000
