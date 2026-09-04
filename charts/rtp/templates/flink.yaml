@@ -153,7 +153,7 @@ spec:
       - {{ .Values.flink.job.archiveTrades | quote }}
       - --run-id
       - {{ .Values.flink.job.runId | quote }}
-      {{- if .Values.icebergRest.enabled }}
+      {{- if .Values.flink.job.icebergEnabled }}
       {{/*
         두 번째 싱크. ClickHouse 를 대체하지 않고 **나란히** 쓴다.
         전달 보장이 달라서(at-least-once vs exactly-once) 같은 입력에서

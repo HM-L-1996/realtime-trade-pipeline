@@ -107,6 +107,16 @@ flink:
     topic: trades.raw
     groupId: rtp-candle-k8s
     runId: k8s-wm5
+    # **운영 잡의 Iceberg 싱크는 꺼 둔다.**
+    #
+    # 싱크 자체는 구현돼 있지만 Parquet writer 가 Hadoop Configuration 을 만들고
+    # 그게 Woodstox(XML 파서)를 필요로 해서, 의존성을 최소로 자른 지금 상태로는
+    # 첫 레코드에서 실패한다. 그러면 **잡 전체가 재시작 루프에 빠져**
+    # 운영 캔들 적재까지 흔들린다 - 실제로 장중에 그렇게 됐다.
+    #
+    # 부가 기능이 본류를 멈추게 두지 않는다. 의존성을 갖춘 뒤
+    # exp-dual 실험 잡에서 먼저 검증하고 그때 켠다.
+    icebergEnabled: false
     # Iceberg 쪽 테이블. 네임스페이스를 포함해야 한다.
     icebergTable: rtp.candles_1m
     # validation.md 의 "설정 변경에 따른 정확도 변화" 표가 이 값들을 바꿔가며 나온다.
