@@ -1,0 +1,139 @@
+{{- if .Values.superset.enabled }}
+{{/*
+  Superset. CLAUDE.md 가 정한 순서의 마지막 단계다.
+
+  **운영 잡을 건드리지 않는다.** ClickHouse 를 읽기만 하는 별도 Deployment 이고
+  Flink 쪽 설정에는 손대지 않는다. 마지막에 붙이는 것이 검증을 흔든 전례가 있어서
+  (Iceberg 싱크가 장중에 파이프라인을 멈춰 세웠다) 경로를 아예 분리했다.
+
+  Grafana 와 역할이 다르다.
+    Grafana  - Prometheus 를 본다 -> 지금 건강한가
+    Superset - ClickHouse 를 본다 -> 결과가 맞았는가
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: superset-secret
+type: Opaque
+stringData:
+  {{/*
+    Flask 세션 서명 키. 로컬 전용이라 values 에 두지만, 없으면 뜨지 않게
+    superset_config.py 가 os.environ[...] 로 읽는다 - 약한 기본값으로
+    조용히 도는 것이 안 뜨는 것보다 나쁘다.
+  */}}
+  secretKey: {{ .Values.superset.secretKey | quote }}
+  adminPassword: {{ .Values.superset.adminPassword | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: superset-home
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.superset.storage | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-bootstrap
+data:
+{{ (.Files.Glob "files/superset/*.py").AsConfig | indent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+spec:
+  selector: { app: superset }
+  ports:
+    - { name: http, port: 8088, targetPort: 8088 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+spec:
+  replicas: 1
+  {{/* RWO 볼륨이라 새 파드를 띄우기 전에 옛 파드를 내려야 한다. */}}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: superset }
+  template:
+    metadata:
+      labels: { app: superset }
+      annotations:
+        checksum/bootstrap: {{ (.Files.Glob "files/superset/*.py").AsConfig | sha256sum }}
+    spec:
+      securityContext:
+        {{/* 공식 이미지는 uid 1000(superset)으로 돈다. PVC 를 쓰려면 그룹을 맞춰야 한다. */}}
+        fsGroup: 1000
+      initContainers:
+        {{/*
+          메타데이터 DB 마이그레이션과 관리자 계정, 그리고 ClickHouse 연결·데이터셋 생성.
+          여러 번 돌아도 안전하게 짰다 - 파드가 다시 뜰 때마다 실행된다.
+        */}}
+        - name: init
+          image: {{ .Values.superset.image }}
+          imagePullPolicy: Never
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              superset db upgrade
+              superset fab create-admin \
+                --username admin --firstname admin --lastname admin \
+                --email admin@example.com --password "$SUPERSET_ADMIN_PASSWORD" || true
+              superset init
+              python /bootstrap/bootstrap.py
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: superset-secret, key: secretKey } }
+            - name: SUPERSET_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: superset-secret, key: adminPassword } }
+            - name: CLICKHOUSE_USER
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
+            - { name: CLICKHOUSE_HOST, value: "clickhouse.{{ .Release.Namespace }}.svc.cluster.local" }
+            - { name: CLICKHOUSE_DB, value: {{ .Values.clickhouse.db | quote }} }
+          volumeMounts:
+            - { name: home, mountPath: /app/superset_home }
+            - { name: bootstrap, mountPath: /bootstrap }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      containers:
+        - name: superset
+          image: {{ .Values.superset.image }}
+          imagePullPolicy: Never
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              exec gunicorn \
+                --bind 0.0.0.0:8088 \
+                --workers 2 --worker-class gthread --threads 4 \
+                --timeout 120 \
+                "superset.app:create_app()"
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: superset-secret, key: secretKey } }
+          ports:
+            - { containerPort: 8088, name: http }
+          readinessProbe:
+            httpGet: { path: /health, port: 8088 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - { name: home, mountPath: /app/superset_home }
+          resources:
+            requests: { cpu: 200m, memory: 1Gi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: home
+          persistentVolumeClaim: { claimName: superset-home }
+        - name: bootstrap
+          configMap: { name: superset-bootstrap }
+{{- end }}
