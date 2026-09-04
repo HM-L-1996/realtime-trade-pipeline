@@ -7,6 +7,8 @@ UI 에서 손으로 만들면 재현이 안 된다. 클러스터를 다시 세�
 """
 
 import os
+import time
+import traceback
 
 # **모델은 앱 컨텍스트 안에서 임포트한다.**
 # 모듈 최상단에서 import 하면 superset.models.helpers 가 app.config 를 읽다가
@@ -120,14 +122,27 @@ def main() -> None:
             db.session.commit()
             # 컬럼 메타데이터를 실제 쿼리 결과에서 읽어 온다.
             # 이걸 안 하면 차트를 만들 때 컬럼 목록이 비어 있다.
-            try:
-                table.fetch_metadata()
-                db.session.commit()
-                print(f"  컬럼 {len(table.columns)}개 인식")
-            except Exception as exc:  # noqa: BLE001
+            # 컬럼 인식은 **한 번 실패할 수 있다.** init 컨테이너에서만 재현되는
+            # 실패를 만났고(superset 컨테이너에서 같은 코드가 바로 성공했다)
+            # 원인을 특정하지 못했다. 추측으로 덮지 않고 재시도 + 전체 스택으로 둔다.
+            last_error = None
+            for attempt in (1, 2, 3):
+                try:
+                    table.fetch_metadata()
+                    db.session.commit()
+                    print(f"  컬럼 {len(table.columns)}개 인식 (시도 {attempt})")
+                    last_error = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    db.session.rollback()
+                    print(f"  시도 {attempt} 실패: {type(exc).__name__}: {exc}")
+                    time.sleep(3)
+            if last_error is not None:
                 # 부트스트랩이 실패해도 Superset 자체는 떠야 한다.
-                # 다만 조용히 넘기지는 않는다 - 왜 컬럼이 비었는지 알 수 있어야 한다.
-                print(f"  !! 컬럼 메타데이터 읽기 실패: {exc}")
+                # 다만 조용히 넘기지 않는다 - 왜 컬럼이 비었는지 알 수 있어야 한다.
+                print("  !! 컬럼 메타데이터를 읽지 못했다. 전체 스택:")
+                traceback.print_exc()
 
         print("부트스트랩 완료")
 
