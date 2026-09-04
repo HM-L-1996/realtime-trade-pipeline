@@ -13,11 +13,22 @@ import os
 # "Working outside of application context" 로 죽는다. 실제로 그렇게 실패했다.
 from superset.app import create_app
 
-CH_USER = os.environ["CLICKHOUSE_USER"]
-CH_PASSWORD = os.environ["CLICKHOUSE_PASSWORD"]
-CH_HOST = os.environ.get("CLICKHOUSE_HOST", "clickhouse.rtp.svc.cluster.local")
-CH_PORT = os.environ.get("CLICKHOUSE_PORT", "8123")
-CH_DB = os.environ.get("CLICKHOUSE_DB", "rtp")
+# **환경변수 이름에 RTP_ 접두어를 붙인다.**
+#
+# 쿠버네티스는 같은 네임스페이스의 서비스마다 <이름>_PORT, <이름>_SERVICE_HOST 같은
+# 환경변수를 파드에 자동으로 주입한다. `clickhouse` 라는 서비스가 있으므로
+# CLICKHOUSE_PORT 는 이미 `tcp://10.96.18.37:8123` 으로 채워져 있었고,
+# 내가 기본값으로 쓰려던 "8123" 이 그것에 덮였다. 결과가 이랬다.
+#
+#   clickhousedb://rtp:rtp@clickhouse...local:tcp://10.96.18.37:8123/rtp
+#
+# Superset 은 멀쩡히 떴고 데이터소스만 조용히 깨졌다.
+# 이름을 겹치지 않게 두는 것이 근본 해결이다.
+CH_USER = os.environ["RTP_CH_USER"]
+CH_PASSWORD = os.environ["RTP_CH_PASSWORD"]
+CH_HOST = os.environ["RTP_CH_HOST"]
+CH_PORT = os.environ["RTP_CH_PORT"]
+CH_DB = os.environ["RTP_CH_DB"]
 
 DATABASE_NAME = "ClickHouse (rtp)"
 

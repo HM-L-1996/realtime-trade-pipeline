@@ -93,12 +93,19 @@ spec:
               valueFrom: { secretKeyRef: { name: superset-secret, key: secretKey } }
             - name: SUPERSET_ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: superset-secret, key: adminPassword } }
-            - name: CLICKHOUSE_USER
+            {{/*
+              **CLICKHOUSE_ 로 시작하는 이름을 쓰지 않는다.**
+              쿠버네티스가 `clickhouse` 서비스를 보고 CLICKHOUSE_PORT 를
+              `tcp://10.96.x.x:8123` 으로 자동 주입하기 때문이다.
+              실제로 그 값이 URI 의 포트 자리에 들어가 데이터소스가 조용히 깨졌다.
+            */}}
+            - name: RTP_CH_USER
               valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: user } }
-            - name: CLICKHOUSE_PASSWORD
+            - name: RTP_CH_PASSWORD
               valueFrom: { secretKeyRef: { name: clickhouse-credentials, key: password } }
-            - { name: CLICKHOUSE_HOST, value: "clickhouse.{{ .Release.Namespace }}.svc.cluster.local" }
-            - { name: CLICKHOUSE_DB, value: {{ .Values.clickhouse.db | quote }} }
+            - { name: RTP_CH_HOST, value: "clickhouse.{{ .Release.Namespace }}.svc.cluster.local" }
+            - { name: RTP_CH_PORT, value: "8123" }
+            - { name: RTP_CH_DB, value: {{ .Values.clickhouse.db | quote }} }
           volumeMounts:
             - { name: home, mountPath: /app/superset_home }
             - { name: bootstrap, mountPath: /bootstrap }
