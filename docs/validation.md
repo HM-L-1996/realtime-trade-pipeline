@@ -255,6 +255,32 @@ gap_start_kst            gap_end_kst              gap_seconds
 `scripts/verify.sh` 가 `vol_ok` 를 채점의 중심에 두는 이유다.
 자세한 것은 `failure-notes.md` 의 "소스가 2.2초 끊겼을 때 무엇을 잃는가".
 
+### 두 싱크는 값이 같고 기록 횟수만 다르다 (2026-09-04)
+
+같은 캔들 스트림을 ClickHouse 와 Iceberg 에 동시에 흘린 뒤
+TaskManager 를 강제 종료해 "쓴 뒤 커밋 전" 구간을 만들었다.
+
+| | 윈도 | 기록된 행 | 중복된 윈도 |
+|---|---|---|---|
+| ClickHouse (at-least-once) | 20 | **22** | **2** |
+| Iceberg (exactly-once) | 20 | **20** | **0** |
+
+중복은 정확히 **09:40 윈도**, 즉 09:41:25 에 죽였을 때 처리 중이던 그 분이다.
+두 행의 값이 같다(`[7161, 7161]`) — 부분 재계산이 아니라 온전한 중복이다.
+
+**값 자체는 완전히 일치한다.** 중복을 제거하고 대조하면
+시가·고가·저가·종가·거래량·체결 수가 전 항목 같다.
+
+```sql
+-- ClickHouse 한 엔진에서 두 저장소를 대조할 수 있다
+WITH ice AS (SELECT * FROM iceberg('http://minio:9000/warehouse/rtp/candles_dual/', ...))
+SELECT countIf(i.volume = c.volume) ... FROM ice i INNER JOIN ch c USING (symbol, window_start)
+```
+
+> 이 표가 두 번째 싱크를 붙인 이유다.
+> "at-least-once 와 exactly-once 는 다르다" 는 문장 대신
+> **같은 입력·같은 장애에서 숫자가 갈리는 것**을 남기고 싶었다.
+
 ## 여기까지 오는 데 걸린 함정
 
 ### 공식 캔들의 `timestamp` 는 윈도 **종료** 시각이다

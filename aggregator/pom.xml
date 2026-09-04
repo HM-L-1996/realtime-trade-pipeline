@@ -101,19 +101,37 @@
         NoClassDefFoundError: org/apache/hadoop/conf/Configurable
           at org.apache.iceberg.SerializableTable.fileIO(SerializableTable.java:127)
 
-      우리는 Hadoop 파일시스템을 **쓰지 않는다.** 타입 검사에 필요할 뿐이다.
-      그래서 전이 의존성을 전부 끊고 hadoop-common 한 개만 넣는다 -
-      그러지 않으면 guava·jetty·kerby 까지 따라와 jar 이 폭증한다.
+      **처음에는 전이 의존성을 전부 끊었다가 장중에 당했다.**
+      클래스 로딩은 통과하는데 실제로 쓸 때 터진다.
+
+        NoClassDefFoundError: com/ctc/wstx/io/InputBootstrapper
+          at org.apache.iceberg.parquet.Parquet$WriteBuilder.<init>
+
+      Parquet writer 가 Hadoop Configuration 을 만들고, 그 초기화가
+      core-default.xml 을 읽느라 Woodstox(XML 파서)를 쓰기 때문이다.
+      "안 쓰니까 없어도 된다" 가 아니라 **초기화 경로에 있으면 필요하다.**
+
+      그래서 지금은 전이 의존성을 **끊지 않는다.** 대신 확실히 쓰지 않는
+      큰 덩어리만 골라 제외한다 - 웹 서버(jetty), 인증(kerby), RPC(avro),
+      주키퍼 계열은 이 프로젝트에서 어느 경로로도 닿지 않는다.
+      Hadoop 파일시스템 자체는 여전히 쓰지 않는다(S3 는 Iceberg S3FileIO).
     -->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
       <exclusions>
-        <exclusion>
-          <groupId>*</groupId>
-          <artifactId>*</artifactId>
-        </exclusion>
+        <exclusion><groupId>org.eclipse.jetty</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.eclipse.jetty.websocket</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>com.sun.jersey</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.kerby</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.zookeeper</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.curator</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.avro</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.hadoop</groupId><artifactId>hadoop-auth</artifactId></exclusion>
+        <exclusion><groupId>com.jcraft</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>dnsjava</groupId><artifactId>*</artifactId></exclusion>
+        <exclusion><groupId>org.apache.commons</groupId><artifactId>commons-compress</artifactId></exclusion>
       </exclusions>
     </dependency>
 

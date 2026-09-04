@@ -54,7 +54,7 @@ metadata:
   name: exp-dual
   namespace: rtp
 spec:
-  image: rtp-aggregator:0.1.5
+  image: rtp-aggregator:0.1.7
   imagePullPolicy: Never
   flinkVersion: v1_20
   serviceAccount: flink
