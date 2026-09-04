@@ -8,10 +8,10 @@ UI 에서 손으로 만들면 재현이 안 된다. 클러스터를 다시 세�
 
 import os
 
-from superset import db
+# **모델은 앱 컨텍스트 안에서 임포트한다.**
+# 모듈 최상단에서 import 하면 superset.models.helpers 가 app.config 를 읽다가
+# "Working outside of application context" 로 죽는다. 실제로 그렇게 실패했다.
 from superset.app import create_app
-from superset.connectors.sqla.models import SqlaTable
-from superset.models.core import Database
 
 CH_USER = os.environ["CLICKHOUSE_USER"]
 CH_PASSWORD = os.environ["CLICKHOUSE_PASSWORD"]
@@ -69,6 +69,10 @@ DATASETS = [
 def main() -> None:
     app = create_app()
     with app.app_context():
+        from superset import db
+        from superset.connectors.sqla.models import SqlaTable
+        from superset.models.core import Database
+
         uri = f"clickhousedb://{CH_USER}:{CH_PASSWORD}@{CH_HOST}:{CH_PORT}/{CH_DB}"
 
         database = db.session.query(Database).filter_by(database_name=DATABASE_NAME).one_or_none()
