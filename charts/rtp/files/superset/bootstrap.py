@@ -41,22 +41,11 @@ DATABASE_NAME = "ClickHouse (rtp)"
 #   한쪽으로만 음수, 앞뒤는 정상   -> 잡이 죽은 채 오프셋만 넘어간 것
 #
 # 시계열로 겹쳐 보면 즉시 갈린다. 그것이 이 데이터셋의 목적이다.
+#
+# **CTE(WITH) 로 쓰지 않는다.** Superset 의 가상 데이터셋 검증이
+# "Only `SELECT` statements are allowed" 로 거부한다. 같은 내용을
+# 서브쿼리로 쓰면 통과한다 - 의미는 같고 첫 토큰만 다르다.
 ACCURACY_SQL = """
-WITH mine AS (
-  SELECT symbol, window_start,
-         argMax(volume, ingested_at) AS my_volume,
-         argMax(close,  ingested_at) AS my_close,
-         count() AS write_count
-  FROM rtp.candles_1m
-  GROUP BY symbol, window_start
-),
-off AS (
-  SELECT symbol, window_start,
-         argMax(volume, fetched_at) AS off_volume,
-         argMax(close,  fetched_at) AS off_close
-  FROM rtp.candles_1m_official
-  GROUP BY symbol, window_start
-)
 SELECT
   m.window_start + INTERVAL 9 HOUR        AS window_kst,
   m.symbol                                AS symbol,
@@ -67,8 +56,21 @@ SELECT
      toFloat64(m.my_volume - f.off_volume) / toFloat64(f.off_volume) * 100) AS volume_diff_pct,
   toFloat64(m.my_close - f.off_close)     AS close_diff,
   m.write_count                           AS write_count
-FROM mine m
-INNER JOIN off f
+FROM (
+  SELECT symbol, window_start,
+         argMax(volume, ingested_at) AS my_volume,
+         argMax(close,  ingested_at) AS my_close,
+         count() AS write_count
+  FROM rtp.candles_1m
+  GROUP BY symbol, window_start
+) AS m
+INNER JOIN (
+  SELECT symbol, window_start,
+         argMax(volume, fetched_at) AS off_volume,
+         argMax(close,  fetched_at) AS off_close
+  FROM rtp.candles_1m_official
+  GROUP BY symbol, window_start
+) AS f
   ON m.symbol = f.symbol AND m.window_start = f.window_start
 """
 
