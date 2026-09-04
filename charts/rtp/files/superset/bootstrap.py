@@ -122,9 +122,15 @@ def main() -> None:
             db.session.commit()
             # 컬럼 메타데이터를 실제 쿼리 결과에서 읽어 온다.
             # 이걸 안 하면 차트를 만들 때 컬럼 목록이 비어 있다.
-            # 컬럼 인식은 **한 번 실패할 수 있다.** init 컨테이너에서만 재현되는
-            # 실패를 만났고(superset 컨테이너에서 같은 코드가 바로 성공했다)
-            # 원인을 특정하지 못했다. 추측으로 덮지 않고 재시도 + 전체 스택으로 둔다.
+            # **SQL 을 바꾼 직후의 실행에서만 실패했다.**
+            #
+            # 관측한 것: SQL 을 고친 배포에서는 "Only `SELECT` statements are allowed"
+            # 로 실패하고, 같은 SQL 로 다시 돌리면 첫 시도에 성공한다.
+            # 파서(`is_select=True`)도 `SQLScript`(`has_mutation=False`)도 통과하므로
+            # SQL 자체의 문제가 아니라 **세션이 들고 있는 이전 값**을 보는 것으로 보인다.
+            #
+            # 그래서 재시도 전에 객체를 만료시켜 DB 에서 다시 읽게 한다.
+            # 그래도 안 되면 전체 스택을 남긴다 - 조용히 컬럼이 비어 있는 것이 최악이다.
             last_error = None
             for attempt in (1, 2, 3):
                 try:
@@ -136,6 +142,8 @@ def main() -> None:
                 except Exception as exc:  # noqa: BLE001
                     last_error = exc
                     db.session.rollback()
+                    # 세션 캐시를 비우고 DB 에서 다시 읽는다.
+                    db.session.expire(table)
                     print(f"  시도 {attempt} 실패: {type(exc).__name__}: {exc}")
                     time.sleep(3)
             if last_error is not None:
