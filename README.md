@@ -108,11 +108,11 @@ cp .env.example .env      # 토스증권 Open API 키를 채운다
 # 잡·수집기·대시보드 이미지를 만들어 노드에 적재한다.
 # kind 는 레지스트리를 안 쓰므로 이미지를 직접 넣어야 하고,
 # 그래서 매니페스트가 imagePullPolicy: Never 다.
-docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.6 .
+docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.7 .
 docker build -f ingester/Dockerfile   -t rtp-ingester:0.1.2 .
 docker build -f superset/Dockerfile   -t rtp-superset:0.1.0 superset/
 
-for img in rtp-aggregator:0.1.6 rtp-ingester:0.1.2 rtp-superset:0.1.0; do
+for img in rtp-aggregator:0.1.7 rtp-ingester:0.1.2 rtp-superset:0.1.0; do
   kind load docker-image "$img" --name rtp
 done
 

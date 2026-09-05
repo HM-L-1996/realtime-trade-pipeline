@@ -108,7 +108,7 @@ flink:
   # 그대로라 Operator 가 변경을 감지하지 못하고, 파드는 노드에 캐시된 옛 이미지를
   # 계속 쓴다. imagePullPolicy: Never 라 더욱 그렇다.
   # 태그를 올리면 spec 이 바뀌므로 upgradeMode: savepoint 경로를 타고 재배포된다.
-  image: rtp-aggregator:0.1.6
+  image: rtp-aggregator:0.1.7
   # kind load 로 노드에 적재한 로컬 이미지다. 레지스트리에서 받으려 하면 실패한다.
   imagePullPolicy: Never
   version: v1_20
@@ -128,16 +128,20 @@ flink:
     topic: trades.raw
     groupId: rtp-candle-k8s
     runId: k8s-wm5
-    # **운영 잡의 Iceberg 싱크는 꺼 둔다.**
+    # **켠다(2026-09-05).** 조건을 지켜서 켰다.
     #
-    # 싱크 자체는 구현돼 있지만 Parquet writer 가 Hadoop Configuration 을 만들고
-    # 그게 Woodstox(XML 파서)를 필요로 해서, 의존성을 최소로 자른 지금 상태로는
-    # 첫 레코드에서 실패한다. 그러면 **잡 전체가 재시작 루프에 빠져**
-    # 운영 캔들 적재까지 흔들린다 - 실제로 장중에 그렇게 됐다.
+    # 한 번 껐던 이유: 의존성을 최소로 자른 상태로 장을 맞았다가 Parquet writer 가
+    # Woodstox 를 못 찾아 첫 레코드에서 죽었고, Flink 에서는 한 연산자의 실패가
+    # 잡 전체의 재시작이라 파이프라인이 재시작 루프에 빠졌다.
     #
-    # 부가 기능이 본류를 멈추게 두지 않는다. 의존성을 갖춘 뒤
-    # exp-dual 실험 잡에서 먼저 검증하고 그때 켠다.
-    icebergEnabled: false
+    # 켜기 전에 셋을 갖췄다.
+    #   1. 전이 의존성을 선별 제외로 바꿔 실제로 동작하게 했다(fat jar 120 -> 144MB)
+    #   2. 실험 잡(exp-dual)에서 먼저 검증했다 - Parquet 커밋과 ClickHouse 대조까지
+    #   3. 장이 닫힌 시각에 배포한다. 켜는 순간 savepoint 재배포가 일어난다
+    #
+    # 그리고 같은 사고를 빨리 잡도록 JobRestartLooping 알람을 넣었다.
+    # 그 알람이 없어서 지난번에는 손으로 알아챘다.
+    icebergEnabled: true
     # Iceberg 쪽 테이블. 네임스페이스를 포함해야 한다.
     icebergTable: rtp.candles_1m
     # validation.md 의 "설정 변경에 따른 정확도 변화" 표가 이 값들을 바꿔가며 나온다.

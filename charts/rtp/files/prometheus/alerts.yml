@@ -93,6 +93,22 @@ groups:
           summary: "컨슈머 lag 이 2만 건을 넘었고 계속 늘고 있다"
           description: "따라잡는 중이면 deriv 가 음수라 발화하지 않는다. busyRatio 와 백프레셔를 볼 것."
 
+      # 잡이 반복해서 재시작하는가.
+      #
+      # **이 알람이 없어서 장중 사고를 손으로 알아챘다.** 검증 안 된 부가 싱크가
+      # 첫 캔들에서 죽었고, Flink 에서 한 연산자의 실패는 잡 전체의 재시작이라
+      # 파이프라인이 재시작 루프에 빠졌다. 그 사이 같은 윈도가 여섯 번 기록됐다.
+      #
+      # 재시작 자체는 정상이다 - TaskManager 가 죽으면 복구하는 것이 맞다.
+      # 문제는 **반복**이다. 10분에 세 번을 넘으면 스스로 낫지 못하는 상태다.
+      - alert: JobRestartLooping
+        expr: max by (job_name) (increase(flink_jobmanager_job_numRestarts[10m])) > 3
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.job_name }} 이 10분간 3회 넘게 재시작했다"
+          description: "재시작마다 이미 닫힌 윈도가 다시 발행되어 중복이 쌓인다. 실패하는 연산자를 찾아 끄는 것이 먼저다."
+
       # 아무도 읽지 않는 파티션이 있는가.
       #
       # **lag 으로는 절대 잡을 수 없는 사고다.** Flink 의 파티션 재발견은 기본이
