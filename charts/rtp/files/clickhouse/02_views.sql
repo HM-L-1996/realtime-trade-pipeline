@@ -3,22 +3,42 @@
 -- 중복을 접은 "최종" 캔들. 같은 윈도가 여러 번 들어왔으면 마지막 것을 쓴다.
 -- write_count 가 1이 아니면 그 윈도는 중복 기록된 것 — exactly-once 검증 지점.
 --
--- 주의: ingested_at 이 ms 해상도라 같은 밀리초에 두 번 쓰이면 argMax 의 승자가
--- 정해지지 않는다. 실제 재기록은 초 단위로 벌어지므로 보통은 문제되지 않지만,
--- 재처리를 몰아서 돌릴 때는 동률이 날 수 있다. 그때는 run_id 로 구분한다.
+-- **컬럼마다 argMax 를 따로 부르면 안 된다.**
+--
+-- ingested_at 은 ms 해상도라 같은 밀리초에 두 번 쓰이면 순서가 정해지지 않는다.
+-- 그때 argMax 를 여섯 번 따로 부르면 **각 호출이 서로 다른 행을 고를 수 있다** -
+-- 시가는 A 에서, 종가는 B 에서 온 캔들이 나온다. 그건 **실제로 존재한 적 없는 값**이고,
+-- 공식 캔들과 대조했을 때 어느 쪽 잘못인지 영원히 설명되지 않는다.
+-- "승자가 누구냐" 보다 "한 행에서 통째로 가져오느냐" 가 먼저다.
+--
+-- 그래서 OHLCV 를 튜플로 묶어 **한 번만** argMax 한다. 동률이어도 여섯 값이
+-- 반드시 같은 행에서 온다.
+--
+-- 정렬 키에 run_id 를 더한 것은 "그쪽이 더 맞는 값이어서" 가 아니다. run_id 가 크다고
+-- 나중에 쓴 것도 아니다. **같은 질의를 다시 돌렸을 때 같은 답이 나오게** 하려는 것이다 -
+-- 검증 수치가 조회할 때마다 흔들리면 비교 자체가 성립하지 않는다.
+-- 같은 실행이 같은 밀리초에 두 번 쓴 경우는 여전히 임의지만, 적어도 온전한 한 행이다.
 CREATE VIEW IF NOT EXISTS rtp.candles_1m_dedup AS
 SELECT
     symbol,
     window_start,
-    argMax(open, ingested_at)        AS open,
-    argMax(high, ingested_at)        AS high,
-    argMax(low, ingested_at)         AS low,
-    argMax(close, ingested_at)       AS close,
-    argMax(volume, ingested_at)      AS volume,
-    argMax(trade_count, ingested_at) AS trade_count,
-    count()                          AS write_count
-FROM rtp.candles_1m
-GROUP BY symbol, window_start;
+    tupleElement(latest, 1) AS open,
+    tupleElement(latest, 2) AS high,
+    tupleElement(latest, 3) AS low,
+    tupleElement(latest, 4) AS close,
+    tupleElement(latest, 5) AS volume,
+    tupleElement(latest, 6) AS trade_count,
+    write_count
+FROM (
+    SELECT
+        symbol,
+        window_start,
+        argMax((open, high, low, close, volume, trade_count),
+               (ingested_at, run_id)) AS latest,
+        count()                       AS write_count
+    FROM rtp.candles_1m
+    GROUP BY symbol, window_start
+);
 
 -- 공식 캔들 대비 차이. 이 뷰가 이 프로젝트의 채점표다.
 -- 공식 캔들 기준 LEFT JOIN이므로 내 쪽에 없는 윈도(missing=1)도 드러난다.
