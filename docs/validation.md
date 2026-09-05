@@ -26,7 +26,7 @@
 - **비교 항목**: O/H/L/C/V 전부. 가격은 `Decimal64(4)`, 거래량은 `Decimal64(8)` 로 **정확 비교**한다.
   부동소수 근사 비교를 쓰지 않는 이유는 그 순간 "허용 오차" 를 정해야 하고,
   그러면 진짜 오차가 허용 오차 뒤에 숨기 때문이다.
-- **쿼리**: `rtp.candle_diff` 뷰 (`infra/clickhouse/init/02_views.sql`)
+- **쿼리**: `rtp.candle_diff` 뷰 (`charts/rtp/files/clickhouse/02_views.sql`)
 - **중복 판정**: `candles_1m_dedup.write_count`. 1이 아니면 같은 윈도가 두 번 쓰인 것
 
 ```sql

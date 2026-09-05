@@ -89,11 +89,21 @@ ClickHouse 는 **데이터 디렉터리가 비어 있을 때만** `docker-entryp
 PVC 가 이미 차 있으면 초기화 SQL 이 건너뛰어진다. 스키마를 바꾸면 둘 중 하나다.
 
 ```bash
-# 수동 적용
-kubectl exec -n rtp -i clickhouse-0 -- clickhouse-client --user rtp --password rtp   --multiquery < infra/clickhouse/init/01_schema.sql
+# 수동 적용. SQL 은 Helm 차트가 소유한다(compose 도 같은 파일을 마운트한다).
+kubectl exec -n rtp -i clickhouse-0 -- clickhouse-client --user rtp --password rtp   --multiquery < charts/rtp/files/clickhouse/01_schema.sql
 
 # 또는 PVC 를 지우고 재생성 (데이터 손실)
 kubectl delete pvc data-clickhouse-0 -n rtp
+```
+
+**뷰를 고쳤을 때는 파일만 다시 돌려서는 안 된다.** 정의가 전부
+`CREATE VIEW IF NOT EXISTS` 라서 이미 있는 뷰는 **조용히 건너뛴다** —
+명령이 성공하고 뷰는 옛것 그대로다. 지워야 바뀐다.
+
+```bash
+kubectl exec -n rtp clickhouse-0 -- clickhouse-client -u rtp --password rtp   -q "DROP VIEW IF EXISTS rtp.candle_diff"
+kubectl cp charts/rtp/files/clickhouse/02_views.sql rtp/clickhouse-0:/tmp/02_views.sql
+kubectl exec -n rtp clickhouse-0 -- sh -c   "clickhouse-client -u rtp --password rtp --multiquery < /tmp/02_views.sql"
 ```
 
 ## 잡 배포 (Flink Operator, Application 모드)
