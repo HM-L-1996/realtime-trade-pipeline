@@ -46,6 +46,24 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2
 kubectl apply -f k8s/argocd/application.yaml
 ```
 
+ArgoCD UI 를 호스트에서 보려면 서비스를 NodePort 로 바꾼다. kind 설정에
+30080 -> 18080 매핑이 있는데 기본 설치는 ClusterIP 라 그 매핑이 놀고 있다.
+
+```bash
+kubectl -n argocd patch svc argocd-server -p '{"spec":{"type":"NodePort","ports":[
+  {"name":"http","port":80,"targetPort":8080,"nodePort":30080},
+  {"name":"https","port":443,"targetPort":8080,"nodePort":30443}]}}'
+
+# 초기 비밀번호 (사용자는 admin)
+kubectl -n argocd get secret argocd-initial-admin-secret   -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+**이건 차트에 넣지 않는다.** ArgoCD 는 차트를 배포하는 쪽이므로 자기 자신을
+차트로 관리하면 순환이 된다. 부트스트랩 영역으로 남겨 둔다.
+
+Flink Web UI(30081)는 차트가 `flink-ui` NodePort 로 노출한다 —
+그쪽은 우리 것이라 선언에 넣는 편이 맞다.
+
 이후로는 **저장소가 클러스터 상태의 근거**다. `kubectl apply` 로 손댄 것은
 다음 동기화에서 되돌아간다(`selfHeal: true`). "누가 언제 무엇을 바꿨나" 가
 `git log` 로 답해진다.

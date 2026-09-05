@@ -88,43 +88,98 @@ K8s 는 Helm 차트 하나(`charts/rtp`)이고 **ArgoCD 가 저장소를 클러�
 
 ## 실행
 
+**현재 기준은 K8s 다.** CLAUDE.md 가 정한 순서대로 docker-compose 로 먼저 동작시킨 뒤
+옮겼고, compose 구성도 남겨 두었다 — 같은 잡을 두 환경에서 돌려 비교할 수 있어야
+"K8s 로 옮겨서 달라진 것" 을 가릴 수 있기 때문이다.
+
+### 준비
+
 ```bash
 cp .env.example .env      # 토스증권 Open API 키를 채운다
-docker compose -f infra/docker-compose.yml up -d
+./mvnd.sh clean package   # 빌드는 로컬 JDK 없이 Docker 안에서 한다
 ```
 
-빌드는 로컬 JDK 없이 Docker 안에서 한다.
+### K8s (현재 기준)
+
+클러스터·cert-manager·Flink Operator·ArgoCD 설치는 [k8s/README.md](k8s/README.md)에 있다.
+여기서는 그 뒤부터다.
 
 ```bash
-./mvnd.sh clean package
+# 잡·수집기·대시보드 이미지를 만들어 노드에 적재한다.
+# kind 는 레지스트리를 안 쓰므로 이미지를 직접 넣어야 하고,
+# 그래서 매니페스트가 imagePullPolicy: Never 다.
+docker build -f aggregator/Dockerfile -t rtp-aggregator:0.1.6 .
+docker build -f ingester/Dockerfile   -t rtp-ingester:0.1.2 .
+docker build -f superset/Dockerfile   -t rtp-superset:0.1.0 superset/
+
+for img in rtp-aggregator:0.1.6 rtp-ingester:0.1.2 rtp-superset:0.1.0; do
+  kind load docker-image "$img" --name rtp
+done
+
+# 토스 자격증명. public 저장소이므로 차트에 두지 않는다.
+kubectl create secret generic toss-credentials -n rtp --from-env-file=.env
+
+# 배포는 ArgoCD 가 한다. 저장소가 곧 클러스터 상태다.
+kubectl apply -f k8s/argocd/application.yaml
 ```
 
-집계 잡 제출. 기본은 커밋된 오프셋에서 이어 읽는다 —
-`earliest` 로 두면 재배포할 때마다 토픽 전체를 재처리해 같은 윈도가 다시 적재된다.
+**코드를 고치면 이미지 태그를 올린다.** 같은 태그로 다시 적재하면 매니페스트가
+그대로라 Operator 가 변경을 감지하지 못하고, 파드는 노드에 캐시된 옛 이미지를
+계속 쓴다(`imagePullPolicy: Never` 라 더욱 그렇다).
+
+### 접속
+
+| 서비스 | 주소 | 용도 |
+|---|---|---|
+| Flink Web UI | http://localhost:18081 | 백프레셔·체크포인트·subtask 별 처리량 |
+| Grafana | http://localhost:13000 | 지표 — **지금 건강한가** (admin/admin) |
+| ArgoCD | http://localhost:18080 | 배포 상태 |
+| Superset | `kubectl -n rtp port-forward svc/superset 8088:8088` | 결과 — **맞았는가** (admin/admin) |
+| ClickHouse | `kubectl -n rtp exec -it clickhouse-0 -- clickhouse-client -u rtp --password rtp` | 검증 쿼리 |
+
+앞의 셋은 kind 의 `extraPortMappings` 로 호스트에 열려 있다.
+**포트 매핑은 노드 컨테이너를 만들 때 정해지므로** 이미 떠 있는 클러스터에
+새 포트를 열려면 클러스터를 다시 만들어야 한다. Superset 이 port-forward 인 이유다.
+
+### docker-compose (1단계, 지금도 동작한다)
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.observability.yml up -d
+```
+
+집계 잡은 직접 제출한다. 기본은 커밋된 오프셋에서 이어 읽는다 —
+`earliest` 로 두면 재배포할 때마다 토픽 전체를 재처리해 같은 윈도가 다시 적재된다
+(실측 420개).
 
 ```bash
 cp aggregator/target/aggregator-0.1.0.jar infra/flink/jobs/
 docker exec rtp-jobmanager flink run -d /flink/jobs/aggregator-0.1.0.jar   --topic trades.raw --group-id rtp-candle-live --watermark-delay-seconds 5
-
-# 재처리·리플레이 실험은 명시적으로 켠다
-#   --start-offsets earliest
 ```
 
-| 서비스 | 주소 | 용도 |
-|---|---|---|
-| Flink Web UI | http://localhost:8081 | 백프레셔·체크포인트 관측 |
-| ClickHouse | http://localhost:8123 | 검증 쿼리 |
-| Kafka | localhost:9092 | 수집기 접속 |
+| 서비스 | 주소 |
+|---|---|
+| Flink Web UI | http://localhost:8081 |
+| ClickHouse | http://localhost:8123 |
+| Grafana | http://localhost:3000 |
+
+### 검증
 
 검증은 스크립트 하나로 고정돼 있다. 매번 즉석 쿼리를 짜면 결과가 흔들려 비교가 안 된다.
 
 ```bash
-./scripts/verify.sh k8s       # kind 클러스터
+./scripts/verify.sh k8s       # kind 클러스터 (기본값)
 ./scripts/verify.sh compose   # docker-compose 스택
 ```
 
-수집 유실률 → Kafka→Flink 구간 → 공식 캔들 대비 정확도 → 어긋난 윈도 순으로 찍는다.
-**`matched` 가 0 이면 겹치는 구간이 없다는 뜻이므로 정확도를 주장하면 안 된다.**
+**배포 리비전 → 수집 유실률 → 출처 점검 → Kafka→Flink 구간 → 공식 캔들 대비 정확도
+→ 어긋난 윈도 → 버려진 레코드** 순으로 찍는다. 각 항목에 판정 기준이 붙어 있다.
+
+- **`matched` 가 0 이면** 겹치는 구간이 없다는 뜻이므로 정확도를 주장하면 안 된다
+- **1-b 에 가격대가 다른 연결이 섞여 있으면** 3번 수치는 무효다 (실험 데이터가
+  운영 토픽을 오염시켜 한 번 당했다)
+- **0번의 적용 리비전이 HEAD 와 다르면** 아래 결과는 지금 코드의 것이 아니다
+  (ArgoCD 가 `Synced` 라 하면서 이전 리비전을 적용해 둔 적이 있다)
 
 개별 쿼리는 뷰로도 고정돼 있다.
 
@@ -135,29 +190,8 @@ SELECT * FROM rtp.candle_diff WHERE missing OR write_count > 1;
 -- 소스 유실률. recv_seq 는 연결별로 1씩 증가하므로 공백이 곧 유실이다.
 -- 공식 캔들과 어긋났을 때 "내 버그" 와 "소스 유실" 을 가르는 근거.
 SELECT * FROM rtp.source_continuity;
-
--- Kafka→Flink 구간 유실 확인. raw_trades 와 candle_trades 가 다르면 그 구간 문제다.
-SELECT * FROM rtp.trade_count_check WHERE diff != 0;
 ```
 
-### 장애 실험용 계측 (선택)
-
-Prometheus·Grafana는 오버레이로 분리돼 있다. 실험 단계에서 켠다.
-
-```bash
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.observability.yml up -d
-```
-
-Grafana http://localhost:3000 · Prometheus http://localhost:9090
-
-### 장외 시간 검증
-
-국내장은 평일 09:00-15:30만 열린다. 장이 닫혀 있을 때는 합성 체결로 downstream을 돌린다.
-지연 도착과 중복을 의도적으로 주입할 수 있어 장애 실험의 작업 도구이기도 하다.
-
-```bash
-docker run --rm --network rtp_default -v "$PWD:/work" -w /work   -e KAFKA_BOOTSTRAP_SERVERS=kafka:19092 eclipse-temurin:17-jre   java -cp ingester/target/ingester-0.1.0.jar dev.rtp.ingester.SyntheticMain   --rate 40 --duration 60 --late-ratio 0.05 --dup-ratio 0.02
-```
 
 ## 구성
 
