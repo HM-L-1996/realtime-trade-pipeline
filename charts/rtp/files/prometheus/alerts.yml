@@ -41,12 +41,18 @@ groups:
         # 곧바로 pending 이 됐다(10분간 3.08회). 그것으로 사람을 깨우면
         # "배포할 때마다 울리는 알람" 이 되고, 그러면 곧 무시된다.
         # uptime 은 ms 단위이므로 600000 = 10분이다.
+        #
+        # **job_name 이 아니라 job_id 로 묶는다.** job_name 은 잡을 다시 띄워도
+        # 같지만 job_id 는 인스턴스마다 다르다. job_name 으로 묶었더니
+        # 죽은 잡의 uptime 시리즈(25시간)가 아직 안 사라져서 `max()` 가 그것을
+        # 집었고, 재배포 직후 3분 동안 가드가 무력해져 알람이 떴다.
+        # 같은 잡의 재시작 횟수와 그 잡의 uptime 을 비교해야 한다.
         expr: |
-          max by (job_name) (
+          max by (job_id) (
             increase(flink_jobmanager_job_numberOfFailedCheckpoints[10m])
           ) > 3
-          and on (job_name)
-          max by (job_name) (flink_jobmanager_job_uptime) > 600000
+          and on (job_id)
+          max by (job_id) (flink_jobmanager_job_uptime) > 600000
         for: 5m
         labels: { severity: page }
         annotations:
