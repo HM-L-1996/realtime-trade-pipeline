@@ -172,4 +172,27 @@ spec:
       - --s3-endpoint
       - http://minio.{{ .Release.Namespace }}.svc.cluster.local:9000
       {{- end }}
+---
+{{/*
+  JobManager Web UI 를 호스트로 노출한다.
+
+  Operator 가 만드는 `candle-1m-rest` 는 ClusterIP 라 밖에서 못 본다.
+  kind 설정에는 30081 -> 18081 매핑이 **처음부터 있었는데** 거기에 묶인
+  NodePort 서비스가 없어서 매핑이 놀고 있었다 - README 가 안내하던
+  localhost:8081 은 compose 시절 주소였고 K8s 로 옮긴 뒤로 아무 데도 안 닿았다.
+
+  Operator 가 만드는 서비스를 고치지 않고 별도로 둔다. 그쪽을 건드리면
+  Operator 가 되돌리거나 ArgoCD 와 충돌한다.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-ui
+spec:
+  type: NodePort
+  selector:
+    app: {{ .Values.flink.job.name | default "candle-1m" }}
+    component: jobmanager
+  ports:
+    - { name: http, port: 8081, targetPort: 8081, nodePort: 30081 }
 {{- end }}
