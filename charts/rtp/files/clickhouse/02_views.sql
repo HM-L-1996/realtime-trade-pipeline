@@ -34,11 +34,21 @@ SELECT
     CAST(m.symbol = '' AS UInt8)                   AS missing,
     m.write_count                                  AS write_count,
     m.trade_count                                  AS my_trade_count,
-    m.close - o.close                              AS close_diff,
-    m.volume - o.volume                            AS volume_diff,
+    -- **누락 윈도에서는 차이를 내지 않고 NULL 로 둔다.**
+    --
+    -- LEFT JOIN 미매칭이면 m.close 와 m.volume 이 0 으로 채워진다. 그대로 빼면
+    -- close_diff 가 `0 - 250500 = -250500` 이 되어 **"윈도가 통째로 없음" 이
+    -- "가격이 25만 틀림" 으로 읽힌다.** volume_rel_err 도 항상 1.0(100%)이 된다.
+    --
+    -- 이 프로젝트에서 유실과 오차를 가르는 것이 판정의 핵심인데, 그 둘을 한 컬럼에
+    -- 섞으면 뷰가 오히려 판단을 방해한다. 없는 것은 없다고 해야 한다 -
+    -- 크기를 알고 싶으면 missing=1 인 행을 따로 세면 된다.
+    if(m.symbol = '', NULL, m.close - o.close)     AS close_diff,
+    if(m.symbol = '', NULL, m.volume - o.volume)   AS volume_diff,
     -- 상대오차만 Float 로 낸다. 눈으로 크기를 보기 위한 값이고,
     -- 판정 근거가 되는 close_diff/volume_diff 는 Decimal 뺄셈이라 정확하다.
-    toFloat64(abs(m.volume - o.volume)) / nullIf(toFloat64(o.volume), 0) AS volume_rel_err
+    if(m.symbol = '', NULL,
+       toFloat64(abs(m.volume - o.volume)) / nullIf(toFloat64(o.volume), 0)) AS volume_rel_err
 FROM rtp.candles_1m_official AS o
 LEFT JOIN rtp.candles_1m_dedup AS m
        ON o.symbol = m.symbol AND o.window_start = m.window_start;
