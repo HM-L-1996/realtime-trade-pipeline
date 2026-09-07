@@ -73,7 +73,18 @@ CREATE TABLE IF NOT EXISTS rtp.trades_raw
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(event_time)
 ORDER BY (symbol, event_time, seq_in_ms)
-TTL toDateTime(event_time) + INTERVAL 7 DAY;
+-- **30일. 재처리용이 아니라 사후 분석·증거 보존용이다.**
+--
+-- 되감아 다시 처리할 수 있는 범위는 이 TTL 이 아니라 **Kafka 보존(7일)** 이 정한다.
+-- Flink 는 Kafka 에서 읽으므로 Kafka 에 없는 구간은 다시 처리할 수 없다.
+--
+-- 그러면 30일치를 왜 두는가. **무엇이 들어왔는지 되짚기 위해서다.**
+-- 실제로 값을 했다 - 2026-09-08 에 이 테이블이 8,170만 행인 것을 보고
+-- 닷새 전(09-03) 실험의 합성 데이터 8,015만 건이 섞여 있는 것을 찾아냈다.
+-- 7일이었다면 그 증거가 이미 사라졌을 수도 있다.
+--
+-- 자세한 것은 docs/failure-policy.md 의 "되메우기 정책".
+TTL toDateTime(event_time) + INTERVAL 30 DAY;
 
 -- 버려진 레코드. 세기만 하고 버리면 "무엇이 왜 버려졌는지" 를 사후에 볼 수 없고
 -- 고친 뒤 재처리할 수도 없다.
