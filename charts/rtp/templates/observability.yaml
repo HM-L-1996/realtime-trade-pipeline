@@ -151,6 +151,14 @@ data:
         url: http://prometheus.{{ .Release.Namespace }}.svc.cluster.local:9090
         isDefault: true
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secret
+type: Opaque
+stringData:
+  adminPassword: {{ .Values.observability.grafanaAdminPassword | quote }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -167,11 +175,18 @@ spec:
         - name: grafana
           image: {{ .Values.observability.grafanaImage }}
           env:
-            {{/* 로컬 전용. working-notes.md 의 "K8s 이전 시 반드시 바꿀 것" 참고. */}}
             - { name: GF_SECURITY_ADMIN_USER, value: admin }
-            - { name: GF_SECURITY_ADMIN_PASSWORD, value: admin }
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: grafana-secret, key: adminPassword } }
+            {{/*
+              익명 접근은 열어 둔다 - 로컬 kind 라 로그인 없이 대시보드를 보는
+              편의를 유지한다(이제 listenAddress 127.0.0.1 로 이 호스트 자신만
+              닿는다, kind-cluster.yaml 참고). 다만 역할은 Viewer 로 낮춘다 -
+              Admin 이면 익명 방문자가 알람 규칙·데이터소스를 고칠 수 있다.
+              working-notes.md 의 "K8s 이전 시 반드시 바꿀 것" 참고.
+            */}}
             - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
-            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Admin }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer }
           ports:
             - { containerPort: 3000, name: http }
           volumeMounts:
