@@ -281,6 +281,33 @@ SELECT countIf(i.volume = c.volume) ... FROM ice i INNER JOIN ch c USING (symbol
 > "at-least-once 와 exactly-once 는 다르다" 는 문장 대신
 > **같은 입력·같은 장애에서 숫자가 갈리는 것**을 남기고 싶었다.
 
+### 운영 테이블에서도 두 저장소가 일치한다 (2026-09-08)
+
+`candles_dual` 은 실험용 테이블이었다. 운영 잡의 실제 싱크 대상인
+`rtp.candles_1m` 이 MinIO 의 `candles_1m` Iceberg 테이블과도 맞는지는
+따로 확인해야 했다 — 09-07 장중 재시작 루프 사고(`failure-notes.md` 참고)
+이후 Iceberg 싱크를 꺼 두었다가 09-08 개장 뒤 다시 켰기 때문이다.
+
+```sql
+SELECT count() AS total,
+       countIf(i.close = c.close AND i.volume = c.volume
+                AND i.trade_count = c.trade_count) AS exact_match
+FROM iceberg('http://minio.rtp.svc.cluster.local:9000/warehouse/rtp/candles_1m/',
+             'rtpadmin', 'rtpadmin123') AS i
+INNER JOIN rtp.candles_1m_dedup AS c
+  ON i.symbol = c.symbol AND i.window_start = c.window_start
+```
+
+결과: `1304 / 1304`. 시가·고가·저가·종가·거래량·체결 수 전 항목이 일치했고
+기간은 09-04 19:59(KST) ~ 09-08 19:58(KST)까지 걸쳐 있었다.
+
+**한 번은 이 쿼리가 0행을 반환한 적이 있다.** 같은 조회를 몇 분 뒤 다시
+돌리자 정상적으로 1304행이 나왔다. MinIO 의 파일과 REST 카탈로그의
+`metadata-location` 은 그때도 최신 스냅샷(`total-records: 1304`)을
+정확히 가리키고 있었으므로 데이터 쪽 문제는 아니었다 — `iceberg()`
+테이블 함수 쪽의 일시적인 상태로 추정하지만 재현하지 못했다.
+재발하면 원인을 다시 본다.
+
 ## 여기까지 오는 데 걸린 함정
 
 ### 공식 캔들의 `timestamp` 는 윈도 **종료** 시각이다
