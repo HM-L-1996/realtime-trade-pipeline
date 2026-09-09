@@ -3,6 +3,20 @@
   Iceberg REST 카탈로그. 두 번째 싱크(exactly-once)를 붙일 때 쓴다.
   아직 싱크 코드가 없으므로 기본값은 꺼져 있다 - 쓰이지 않는 컴포넌트가
   떠 있으면 "정리 안 된 상태" 로 읽힌다.
+
+  **카탈로그 DB 는 PVC 위에 둔다.** 이 이미지는 CATALOG_URI 를 안 주면
+  기본값이 `jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory` 다 - 문자 그대로
+  인메모리라 컨테이너가 재시작할 때마다(파드 재생성이 아니라 컨테이너 재시작
+  만으로도) 테이블 목록이 통째로 빈다. 실제 데이터 파일(Parquet)은 MinIO에
+  남지만 카탈로그가 그걸 가리키는 방법을 잊어버린다.
+
+  2026-09-09에 이걸로 크게 당했다: docker stop/start 로 이 컨테이너가
+  재시작되자 카탈로그가 비었고, Flink 의 IcebergFilesCommitter 가 체크포인트에
+  적어둔 테이블 참조로 loadTable() 을 계속 시도하다 계속 실패해 운영 잡
+  전체가 재시작 루프에 빠졌다. 거기서 그치지 않고, 루프를 잡으려 Flink 의
+  HA 상태까지 지우는 바람에 job-result-store 가 꼬여 잡이 아예 제출되지도
+  못하는 상태까지 갔다(suspended -> running 강제 사이클로 겨우 복구).
+  자세한 경위는 failure-notes.md 참고.
 */}}
 apiVersion: v1
 kind: Service
@@ -13,12 +27,25 @@ spec:
   ports:
     - { name: rest, port: 8181, targetPort: 8181 }
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iceberg-rest-catalog
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 256Mi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: iceberg-rest
 spec:
   replicas: 1
+  {{/* RWO 볼륨이라 새 파드를 띄우기 전에 옛 파드를 내려야 한다 - superset 과 같은 이유. */}}
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: iceberg-rest }
   template:
@@ -40,6 +67,10 @@ spec:
               valueFrom: { secretKeyRef: { name: minio-credentials, key: accesskey } }
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: minio-credentials, key: secretkey } }
+            # 기본값(인메모리 SQLite)을 PVC 위 파일로 바꾼다 - 위 주석 참고.
+            - { name: CATALOG_URI, value: "jdbc:sqlite:file:/data/catalog.sqlite" }
+          volumeMounts:
+            - { name: catalog-db, mountPath: /data }
           readinessProbe:
             httpGet: { path: /v1/config, port: 8181 }
             initialDelaySeconds: 10
@@ -47,4 +78,7 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 512Mi }
             limits: { memory: 1Gi }
+      volumes:
+        - name: catalog-db
+          persistentVolumeClaim: { claimName: iceberg-rest-catalog }
 {{- end }}

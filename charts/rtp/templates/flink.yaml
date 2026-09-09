@@ -131,17 +131,14 @@ spec:
       실측에서 cancel 후 재시작은 진행 중이던 윈도가 -67% 잘렸고
       savepoint 재개는 손실 0 이었다.
 
-      **임시로 stateless.** iceberg-rest 카탈로그 리셋발 재시작 루프를 잡다가
-      Flink 의 HA 상태(job-result-store, S3 ha 디렉터리)를 직접 지웠다.
-      그 결과 operator 가 들고 있던 upgradeSavepointPath(KUBERNETES_OPERATOR_
-      LAST_STATE)가 가리킬 대상이 사라져, 잡이 제출되자마자 "이미 종료된
-      job-id" 로 처리되어 뜨지 못하는 상태가 됐다. 복구할 savepoint가 이미
-      없으므로 savepoint 모드를 유지해 봐야 매번 같은 실패가 반복된다.
-      stateless 로 한 번 벗어난 뒤 안정되면 savepoint 로 되돌린다.
-      Kafka 오프셋은 --offsets committed 로 별도 커밋되므로 소비 위치는
-      유지된다 - 잃는 것은 Flink 내부 윈도 집계 상태(진행 중이던 캔들)뿐이다.
+      2026-09-09 에 잠깐 stateless 로 내렸다 되돌렸다 - iceberg-rest 카탈로그가
+      리셋되며 Flink 재시작 루프에 빠졌고, 그걸 잡으려 HA 상태를 직접 지웠더니
+      operator 가 들고 있던 upgradeSavepointPath 가 가리킬 대상을 잃어 잡이
+      "이미 종료된 job-id" 로 처리되며 못 떴다. 복구할 savepoint가 없으니
+      stateless 로 한 번 벗어난 뒤(suspended -> running 으로 재조정 강제)
+      다시 savepoint 로 되돌렸다. 자세한 경위는 failure-notes.md 참고.
     */}}
-    upgradeMode: stateless
+    upgradeMode: savepoint
     state: running
     args:
       - --topic
