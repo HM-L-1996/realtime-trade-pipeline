@@ -22,7 +22,13 @@ kafka:
 # 채우려는 공백과 축이 다르고 범위만 넓어진다. 대신 컨테이너로 값이 들어가는
 # 경로는 전부 Secret 을 거치게 해서, 값을 바꿀 때 고칠 곳이 한 군데가 되게 했다.
 clickhouse:
-  image: clickhouse/clickhouse-server:24.8
+  # 24.8 -> 25.8. Iceberg REST 카탈로그를 통째로 붙이는 DatabaseIceberg 엔진이
+  # 목적이다(24.12 도입, 25.8에서 베타로 승격 + 쓰기 지원 추가). 최신 LTS(26.8)
+  # 대신 25.8을 고른 이유: 릴리스 후 1년 넘게 실사용된 편이 갓 나온 버전보다
+  # 이 기능을 시험하기엔 안전하다. 1년 넘는 점프라 ClickHouse 공식 가이드가
+  # 권하는 대로 "중간 버전 없이 한 번에, 다운타임 감수" 로 올린다 - 단일
+  # 레플리카라 파드 재시작 자체가 다운타임이라 이미 그 전제를 만족한다.
+  image: clickhouse/clickhouse-server:25.8
   storage: 10Gi
   db: rtp
   user: rtp
