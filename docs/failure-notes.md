@@ -29,7 +29,8 @@
   **로드되지 않는 알람 규칙**, **dead letter 의 동기 I/O**, **지표를 안 내보내는 실험 잡**,
   **검증 안 된 부가 싱크를 켠 채로 장을 맞은 것**, **K8s 주입 환경변수와 이름이 겹친 것**,
   **실험이 운영 테이블에 원본을 적재한 것**, **`localhost` 로 열었다고 생각한 포트가
-  LAN 에도 열려 있었던 것**
+  LAN 에도 열려 있었던 것**, **Iceberg 카탈로그가 인메모리였던 것(그리고
+  그걸 고치려다 HA 상태를 지워 더 키운 것)**
 
 **뒤의 둘은 내가 찾은 것이 아니라 적대적 리뷰에서 지적받은 것이다.** 그 사실도 적어 둔다 —
 스스로 발견한 것과 지적받은 것을 섞어 놓으면 이 문서의 나머지도 믿기 어려워진다.
@@ -2224,6 +2225,118 @@ Docker 가 기본으로 **`0.0.0.0`** 에 바인딩한다.
 
 **클러스터를 재생성해야 적용된다.** kind 의 포트 매핑은 노드 컨테이너를 만들 때
 정해지므로, 이미 떠 있는 클러스터는 재생성 전까지 여전히 노출된 상태다.
+
+---
+
+### 카탈로그가 인메모리였다 — 재시작 루프에서 HA 상태까지 지워 더 키웠다 (자초, 연쇄)
+
+**성격: 자초, 그리고 대응 중에 스스로 키움.** 2026-09-09 밤, ClickHouse 를
+25.8 로 올려 Iceberg REST 카탈로그를 database 엔진으로 붙여 보려다 발견했다.
+세 단계로 번졌고, 뒤 두 단계는 앞 단계를 고치려던 내 조치가 만들었다.
+
+#### 1단계 — 카탈로그가 컨테이너 재시작마다 비어 있었다
+
+ClickHouse 에서 `DataLakeCatalog` 로 `iceberg-rest` 에 붙였더니 `SHOW TABLES` 가
+빈 목록을 냈다. 에러 로그를 보니 REST 카탈로그 서버 자체가 500 을 내고 있었다 —
+
+```
+UncheckedSQLException: Failed to execute query: SELECT DISTINCT table_namespace ...
+Caused by: SQLiteException: no such table: iceberg_tables
+```
+
+원인은 `charts/rtp/templates/iceberg-rest.yaml` 에 `CATALOG_URI` 를 안 준 것.
+이 이미지의 기본값이 `jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory` —
+문자 그대로 인메모리라 **컨테이너가 재시작하는 순간(파드 재생성까지도 필요 없다)
+카탈로그 테이블 목록이 통째로 빈다.** MinIO 의 Parquet·메타데이터 파일은
+그대로 남지만, 카탈로그가 그걸 가리키는 방법을 잊는다.
+
+이전 세션에서 봤던 "`00000-*.metadata.json` 이 날짜를 달리해 여러 개 있다"는
+관찰(당시엔 원인 미상으로 넘어갔다)이 사실 이 버그의 흔적이었다 — 리셋될
+때마다 Flink 가 `tableExists()` 에 false 를 받아 테이블을 처음부터 다시
+만들었던 것이다.
+
+#### 2단계 — 그 순간 운영 잡이 재시작 루프에 빠져 있었다
+
+이 세션 초입에 docker 컨테이너를 껐다 켰다(도커 재시작 요청에 따른 것).
+그 결과로 `iceberg-rest` 컨테이너도 재시작되어 카탈로그가 비었는데,
+운영 잡(`icebergEnabled: true` 상태였다)의 `IcebergFilesCommitter` 는
+체크포인트에 저장해 둔 `rtp.candles_1m` 참조로 `loadTable()` 을 계속
+시도했다. 카탈로그엔 그 테이블이 없으니 매번 실패 → **커미터 하나의 실패가
+잡 전체를 재시작시켰다.** ClickHouse 확인 결과 5분간 신규 캔들 0건 —
+"부가 기능 하나가 운영 파이프라인을 장중에 멈춰 세웠다" 사고의 재발이다.
+
+**바로 잡았다.** `icebergEnabled: false` 로 되돌려 출혈을 멈췄다.
+
+#### 3단계 — 루프를 잡으려 HA 상태를 지웠다가 잡이 아예 안 뜨게 만들었다
+
+재시작 루프의 잔재로 Flink 의 `job-result-store`(S3, `flink/ha/`)에
+"이 job-id 는 이미 종료됨" 항목이 남아, `icebergEnabled: false` 로 되돌린
+뒤에도 새 제출마다 즉시 이렇게 거부됐다.
+
+```
+Ignoring JobGraph submission ... because the job already reached
+a globally-terminal state (i.e. FAILED, CANCELED, FINISHED)
+```
+
+**이 항목 하나만 지우면 될 줄 알고 지웠는데, 곧바로 같은 파일이 다시 생겼다.**
+원인을 더 보니 FlinkDeployment 의 `status.jobStatus.upgradeSavepointPath` 가
+`KUBERNETES_OPERATOR_LAST_STATE` 였다 — operator 가 "마지막 상태에서
+복구"하는 방식으로 이 잡을 관리하고 있었다는 뜻. 그런데 내가 그 복구 대상인
+HA 디렉터리(`flink/ha/candle-1m/`, `job-result-store/`)를 통째로 지워
+버렸으니, JobManager 는 뜰 때마다 "복구해야 하는데 대상이 없다" 로
+판정하고 그 자리에서 스스로를 종료 상태로 기록했다 — **내가 만든 문제를
+내가 더 크게 만든 것이다.**
+
+`upgradeMode: savepoint` 를 유지한 채로는 매번 같은 실패가 반복될 수밖에
+없었다(복구할 savepoint 자체가 없으므로). `stateless` 로 잠깐 낮췄지만
+그것도 곧바로는 안 먹혔다 — operator 가 spec 변경을 "이미 재조정됨" 으로
+보고 새 배포를 트리거하지 않았기 때문이다. **`FlinkDeployment.spec.job.state`
+를 `suspended` 로 내렸다가 `running` 으로 되돌리는 강제 사이클**로 operator
+가 실제로 새 배포를 만들게 하고 나서야 잡이 정상 제출됐다.
+
+#### 무엇이 무효였나, 무엇이 무사했나
+
+- **Iceberg 쪽 데이터 연속성은 깨졌다.** 카탈로그가 리셋될 때마다 이전
+  스냅샷 계보가 고아가 됐다(물리 파일은 MinIO 에 남지만 카탈로그가
+  더는 참조하지 않는다). 며칠 전부터 반복됐을 가능성이 높다 — 이전
+  세션의 "1304/1304 전부 일치" 검증도 그 검증 시점의 카탈로그
+  인스턴스에 한정된 진실이었다.
+- **ClickHouse 쪽 캔들은 무사했다.** `offsets=committed` 로 Kafka 컨슈머
+  오프셋이 별도로 커밋되어 있어, 잡이 다시 뜬 뒤 멈췄던 구간의 윈도를
+  전부 다시 계산해 채웠다. 재시작 전후 대조로 중복 윈도(`write_count>1`)
+  0건을 확인했다.
+- Grafana `JobRestartLooping` 알람이 실제로 이 사고를 잡을 수 있었을
+  텐데, 알람이 실제로 울리는지는 이번에 직접 보지 않았다 - 손으로 먼저
+  알아챘다.
+
+#### 어떻게 고쳤나
+
+1. **근본 원인.** `iceberg-rest.yaml` 에 PVC(`iceberg-rest-catalog`)를
+   붙이고 `CATALOG_URI=jdbc:sqlite:file:/data/catalog.sqlite` 로 바꿔
+   컨테이너가 재시작해도 카탈로그가 남게 했다. `strategy: Recreate` 도
+   같이 넣었다 — RWO 볼륨이라 superset 과 같은 이유.
+2. **즉발 조치.** 운영 잡의 `icebergEnabled` 는 아직 `false` 로 둔다.
+   카탈로그가 재시작을 실제로 견디는지 한 번 더 확인하기 전에는 다시
+   켜지 않는다.
+3. **HA 복구.** `suspended` → `running` 강제 사이클로 잡 재제출.
+   `upgradeMode` 는 `stateless` 로 벗어난 뒤 안정되자 `savepoint` 로
+   되돌렸다.
+
+#### 남는 것
+
+**"쓰기는 되는데 재시작에서 살아남는가" 는 별개의 질문이다.** 이 REST
+카탈로그는 몇 주째 정상적으로 커밋해 왔다 — 문제는 정상 동작 중엔 전혀
+드러나지 않고, **재시작이라는 별개의 이벤트에서만** 드러난다. 이 저장소가
+Prometheus emptyDir, Grafana 대시보드 소실로 이미 두 번 배운 교훈
+("상태를 갖는 컴포넌트엔 전부 PVC 가 필요하다")을 세 번째로 같은
+컴포넌트군(카탈로그 서버)에서 놓쳤다.
+
+**그리고 장애 대응 중의 조치도 되돌릴 수 있는지 먼저 따져야 한다.**
+job-result-store 항목 하나를 지우는 것과 HA 디렉터리 전체를 지우는 것은
+되돌릴 수 있는 정도가 다르다. 전자는 무해했고 후자는 operator 가 의존하던
+복구 경로를 없애 상황을 더 나쁘게 만들었다 — 압박 속에서 "일단 지우고
+보자" 가 이 저장소에서 이미 한 번 문제였는데(savepoint 없이 재배포)
+비슷한 모양으로 또 나왔다.
 
 ---
 
